@@ -1,0 +1,21 @@
+dcml2pnm(1)                       OFFIS DCMTK                      dcml2pnm(1)
+
+NAME
+       dcml2pnm - Convert DICOM images to PGM/PPM, PNG, TIFF or BMP
+
+
+SYNOPSIS
+       dcml2pnm [options] dcmfile-in [bitmap-out]
+
+DESCRIPTION
+       The  dcml2pnm  tool  is deprecated. Use dcm2img instead, which supports
+       the same command line parameters, and more.
+
+SEE ALSO
+       dcm2img(1)
+
+COPYRIGHT
+       Copyright (C) 2001-2025 by OFFIS e.V., Escherweg  2,  26121  Oldenburg,
+       Germany.
+
+Version 3.7.0                   Mon Dec 15 2025                    dcml2pnm(1)

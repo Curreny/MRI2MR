@@ -1,0 +1,21 @@
+pdf2dcm(1)                        OFFIS DCMTK                       pdf2dcm(1)
+
+NAME
+       pdf2dcm - Encapsulate PDF file into DICOM file format
+
+
+SYNOPSIS
+       pdf2dcm [options] pdffile-in dcmfile-out
+
+DESCRIPTION
+       The  pdf2dcm  tool  is deprecated. Use dcmencap instead, which supports
+       the same command line parameters, and more.
+
+SEE ALSO
+       dcmencap(1)
+
+COPYRIGHT
+       Copyright (C) 2005-2025 by OFFIS e.V., Escherweg  2,  26121  Oldenburg,
+       Germany.
+
+Version 3.7.0                   Mon Dec 15 2025                     pdf2dcm(1)

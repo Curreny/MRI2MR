@@ -1,0 +1,14 @@
+# Separate project; never include it in the MRI2MR repository.
+agnes-harness/
+
+# Local/generated runtime and patient-study workspace data.
+# The Python environment can be recreated from requirements-webui.txt.
+runtime/
+workspace/
+logs/
+
+# Local editor and Python cache files.
+.vscode/
+__pycache__/
+*.py[cod]
+*.log

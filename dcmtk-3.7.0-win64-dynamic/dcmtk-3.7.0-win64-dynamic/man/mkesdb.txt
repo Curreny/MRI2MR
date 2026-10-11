@@ -1,0 +1,39 @@
+mkesdb(1)                         OFFIS DCMTK                        mkesdb(1)
+
+NAME
+       mkesdb - Create encoding scheme database (esdb) files for oficonv
+
+
+SYNOPSIS
+       mkesdb [-d] [-m] [-o outfile] infile
+
+DESCRIPTION
+       The  mkesdb  utility  generates  a  conversion  catalog for the oficonv
+       library. The generated data includes a list of supported encodings  and
+       their  most  important  characteristics,  such as the decoder module to
+       use.
+
+PARAMETERS
+       infile  input file (from oficonv/datasrc/esdb) to be converted
+
+OPTIONS
+   general options
+         -d    debug mode, print debug information
+
+         -m    process directory catalog or alias file,
+               instead of an encoding description
+
+         -o    [f]ilename: string
+               store output in file f
+
+EXIT STATUS
+       The mkesdb utility exits 0 on success, and >0 if an error occurs.
+
+SEE ALSO
+       mkcsmapper(1)
+
+COPYRIGHT
+       This man page is derived from the FreeBSD mkesdb  man  page,  Copyright
+       (C) 2009 Gabor Kovesdan gabor@FreeBSD.org
+
+Version 3.7.0                   Mon Dec 15 2025                      mkesdb(1)

@@ -1,0 +1,42 @@
+mkcsmapper(1)                     OFFIS DCMTK                    mkcsmapper(1)
+
+NAME
+       mkcsmapper - Create csmapper conversion files for oficonv
+
+
+SYNOPSIS
+       mkcsmapper [-d] [-m | -p] [-o outfile] [infile]
+
+DESCRIPTION
+       The mkcsmapper utility generates binary conversion data from plain text
+       conversion  tables  for  the  oficonv  library. The conversion data has
+       three components: The conversion  mapping  between  specific  character
+       encodings,  a  directory  of available mapping files, and a pivot file,
+       which contains the possible source and destination  encoding  pairs  or
+       the set of mappings to use for a compound encoding.
+
+PARAMETERS
+       infile  input file (from oficonv/datasrc/csmapper) to be converted
+
+OPTIONS
+   general options
+         -d    debug mode, print debug information
+
+         -m    create directory of available mapping files
+
+         -p    create pivot file
+
+         -o    [f]ilename: string
+               store output in file f
+
+EXIT STATUS
+       The mkcsmapper utility exits 0 on success, and >0 if an error occurs.
+
+SEE ALSO
+       mkesdb(1)
+
+COPYRIGHT
+       This  man  page  is  derived  from  the  FreeBSD  mkcsmapper  man page,
+       Copyright (C) 2009 Gabor Kovesdan gabor@FreeBSD.org
+
+Version 3.7.0                   Mon Dec 15 2025                  mkcsmapper(1)

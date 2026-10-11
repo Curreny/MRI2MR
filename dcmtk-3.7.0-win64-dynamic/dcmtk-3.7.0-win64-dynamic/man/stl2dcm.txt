@@ -1,0 +1,21 @@
+stl2dcm(1)                        OFFIS DCMTK                       stl2dcm(1)
+
+NAME
+       stl2dcm - Encapsulate STL file into DICOM file format
+
+
+SYNOPSIS
+       stl2dcm [options] stlfile-in dcmfile-out
+
+DESCRIPTION
+       The  stl2dcm  tool  is deprecated. Use dcmencap instead, which supports
+       the same command line parameters, and more.
+
+SEE ALSO
+       dcmencap(1)
+
+COPYRIGHT
+       Copyright (C) 2018-2025 by OFFIS e.V., Escherweg  2,  26121  Oldenburg,
+       Germany.
+
+Version 3.7.0                   Mon Dec 15 2025                     stl2dcm(1)

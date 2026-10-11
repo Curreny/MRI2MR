@@ -1,0 +1,21 @@
+dcm2pdf(1)                        OFFIS DCMTK                       dcm2pdf(1)
+
+NAME
+       dcm2pdf - Extract PDF file from DICOM encapsulated PDF
+
+
+SYNOPSIS
+       dcm2pdf [options] dcmfile-in pdffile-out
+
+DESCRIPTION
+       The  dcm2pdf  tool  is deprecated. Use dcmdecap instead, which supports
+       the same command line parameters, and more.
+
+SEE ALSO
+       dcmdecap(1)
+
+COPYRIGHT
+       Copyright (C) 2007-2025 by OFFIS e.V., Escherweg  2,  26121  Oldenburg,
+       Germany.
+
+Version 3.7.0                   Mon Dec 15 2025                     dcm2pdf(1)

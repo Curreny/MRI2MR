@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-multipart
+psutil
+aiofiles
+pydantic
+numpy
+nibabel
+matplotlib
+Pillow

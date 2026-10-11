@@ -1,0 +1,21 @@
+dcmgpdir(1)                       OFFIS DCMTK                      dcmgpdir(1)
+
+NAME
+       dcmgpdir - Create a general purpose DICOMDIR
+
+
+SYNOPSIS
+       dcmgpdir [options] [dcmfile-in...]
+
+DESCRIPTION
+       The  dcmgpdir  tool is deprecated. Use dcmmkdir instead, which supports
+       the same command line parameters, and more.
+
+SEE ALSO
+       dcmmkdir(1)
+
+COPYRIGHT
+       Copyright (C) 1996-2025 by OFFIS e.V., Escherweg  2,  26121  Oldenburg,
+       Germany.
+
+Version 3.7.0                   Mon Dec 15 2025                    dcmgpdir(1)
