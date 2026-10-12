@@ -66,6 +66,8 @@ MRI2MR-core/
 | **可移植 Python 环境** | 已内置于 `runtime/python/BrainAAL/`，无需额外安装 |
 | **DICOM 文件** | 包含 T1、MRA、MRV、DTI 等序列的 DICOM 文件夹 |
 
+> 从 GitHub 克隆时，请先安装 **Git LFS**，并执行 `git lfs install` 后再运行 `git clone`。`runtime/` 由 Git LFS 下载，目标电脑无需单独安装 Python。
+
 ### 可配置路径（`config/app_settings.json`）
 
 - `MATLAB_EXE`：matlab.exe 完整路径（不在 PATH 时必须填写）
@@ -92,7 +94,7 @@ MRI2MR-core/
 
 ```powershell
 # 在 MRI2MR-core 目录下
-& "C:\Users\admin\anaconda3\envs\BrainAAL\python.exe" -B -m uvicorn app.backend.main:app --host 127.0.0.1 --port 8000
+& ".\runtime\python\BrainAAL\python.exe" -B -m uvicorn app.backend.main:app --host 127.0.0.1 --port 8000
 ```
 
 ---

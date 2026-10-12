@@ -1,9 +1,9 @@
 # Separate project; never include it in the MRI2MR repository.
 agnes-harness/
-
-# Local/generated runtime and patient-study workspace data.
-# The Python environment can be recreated from requirements-webui.txt.
 runtime/
+mri_reface/
+
+# Generated patient-study workspace data.
 workspace/
 logs/
 

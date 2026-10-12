@@ -2,6 +2,9 @@
 
 This package is for users who already have MATLAB and Docker, but do not have the MRI2MR Python environment.
 
+GitHub clone prerequisite:
+- Install Git for Windows with Git LFS, then run `git lfs install` before cloning. The bundled portable Python environment is stored with Git LFS and is downloaded automatically during a normal clone.
+
 Start:
 1. Start Docker Desktop.
 2. Double-click start_core.bat.
