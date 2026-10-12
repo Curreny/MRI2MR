@@ -1,5 +1,5 @@
 # Separate project; never include it in the MRI2MR repository.
-agnes-harness/
+# agnes-harness/
 runtime/
 mri_reface/
 
