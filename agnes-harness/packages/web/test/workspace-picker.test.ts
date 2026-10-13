@@ -75,28 +75,34 @@ describe('workspace picker client', () => {
 })
 
 describe('multi-folder picker client', () => {
-  it('checks capability and decodes a bounded unique path list', async () => {
+  it('checks capability and returns the backend input attachment without composing a prompt', async () => {
+    const attachment = {
+      type: 'file',
+      name: 'DICOM-1-cases.json',
+      mimeType: 'application/vnd.agnes.input+json',
+      data: 'e30=',
+    }
     const capability = vi.fn<typeof fetch>(
       async () => new Response(JSON.stringify({ available: true }), { status: 200 }),
     )
     await expect(multiFolderPickerAvailable(capability)).resolves.toBe(true)
     expect(capability).toHaveBeenCalledWith(
-      '/api/folder-picker',
+      '/api/dicom-picker',
       expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
     )
     await expect(
       requestMultiFolderPicker(
         vi.fn<typeof fetch>(
           async () =>
-            new Response(JSON.stringify({ status: 'selected', paths: ['C:\\a', 'D:\\b', 'C:\\a'] }), {
+            new Response(JSON.stringify({ status: 'selected', attachment }), {
               status: 200,
             }),
         ),
       ),
-    ).resolves.toEqual({ status: 'selected', paths: ['C:\\a', 'D:\\b'] })
+    ).resolves.toEqual({ status: 'selected', attachment })
   })
 
-  it('fails closed when any selected path is malformed', async () => {
+  it('fails closed for legacy path responses', async () => {
     await expect(
       requestMultiFolderPicker(
         vi.fn<typeof fetch>(
@@ -107,5 +113,16 @@ describe('multi-folder picker client', () => {
         ),
       ),
     ).rejects.toThrow('无法确认')
+  })
+  it('reports unreadable directories and treats cancellation as no task', async () => {
+    await expect(
+      requestMultiFolderPicker(
+        async () =>
+          new Response(JSON.stringify({ error: { code: 'DICOM_INPUT_UNREADABLE' } }), { status: 422 }),
+      ),
+    ).rejects.toThrow('无法读取')
+    await expect(
+      requestMultiFolderPicker(async () => new Response(JSON.stringify({ status: 'cancelled' }))),
+    ).resolves.toEqual({ status: 'cancelled' })
   })
 })

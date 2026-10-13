@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from service import Settings, VesselPilotInputError, VesselPilotService
+from parameters import PARAMETERS, parameter_schema, search_space_schema
 
 
 PROTOCOL_VERSION = "2025-03-26"
@@ -58,32 +59,33 @@ TOOLS = [
     },
     {
         "name": "start_dicom_conversion",
-        "description": "Start asynchronous DICOM to MRA/MRV NIfTI conversion.",
+        "description": "Convert DICOM only (nifti: all series), or prepare only the requested reconstruction inputs (artery: MRA, vein: MRV, vessel: MRA+MRV). No reconstruction is started by this tool.",
         "inputSchema": object_schema(
             {
                 "case_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
                 "decompress_with_dcmtk": {"type": "boolean", "default": True},
+                "conversion_mode": {"type": "string", "enum": ["vessel", "nifti", "artery", "vein"], "default": "vessel"},
             },
             ["case_id"],
         ),
     },
     {
         "name": "start_vessel_candidate",
-        "description": "Start one immutable artery/vein reconstruction candidate using only the three allowed tuning parameters.",
+        "description": "Run one reconstruction with target=artery, vein or both. Use parameters for explicit numeric settings; omitted values use defaults. This does not automatically optimize or run extra candidates. The three legacy top-level parameters remain supported.",
         "inputSchema": object_schema(
             {
                 "case_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
                 "candidate_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
-                "vessel_threshold": {"type": "number", "enum": [700, 800, 900]},
-                "mrv_weak_grow_tolerance": {"type": "number", "enum": [0.83, 0.85, 0.88]},
-                "mrv_post_process_min_size": {"type": "integer", "enum": [800, 1000, 1500]},
+                "target": {"type": "string", "enum": ["artery", "vein", "both"], "default": "both"},
+                "parameters": parameter_schema(),
+                **{
+                    name: {key: value for key, value in PARAMETERS[name].items() if key != "default"}
+                    for name in ("vessel_threshold", "mrv_weak_grow_tolerance", "mrv_post_process_min_size")
+                },
             },
             [
                 "case_id",
                 "candidate_id",
-                "vessel_threshold",
-                "mrv_weak_grow_tolerance",
-                "mrv_post_process_min_size",
             ],
         ),
     },
@@ -122,7 +124,7 @@ TOOLS = [
     },
     {
         "name": "evaluate_vessel_candidate",
-        "description": "Validate both GLBs, compute technical mesh metrics including an intracranial-versus-scalp/peripheral vein distribution proxy, and return artery/vein six-view montage images for visual parameter assessment.",
+        "description": "Validate the candidate's requested vessel outputs and return their technical metrics and six-view montage images. The artery-envelope vein proxy is available only for a both-vessels candidate.",
         "inputSchema": object_schema(
             {
                 "case_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
@@ -133,7 +135,7 @@ TOOLS = [
     },
     {
         "name": "suggest_vessel_parameters",
-        "description": "Recommend one untried one-parameter change from an evaluated candidate and the model's artery/vein montage assessments.",
+        "description": "Propose one untried parameter change for the candidate target after visual assessment. Supports custom search_space, locked_parameters and max_candidates (default 6). Returns advice only; never launches jobs or claims a global optimum.",
         "inputSchema": object_schema(
             {
                 "case_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
@@ -150,8 +152,11 @@ TOOLS = [
                         "uncertain",
                     ],
                 },
+                "search_space": search_space_schema(),
+                "locked_parameters": {"type": "array", "items": {"type": "string", "enum": list(PARAMETERS)}, "uniqueItems": True},
+                "max_candidates": {"type": "integer", "minimum": 1, "maximum": 100, "default": 6},
             },
-            ["case_id", "based_on_candidate_id", "artery_assessment", "vein_assessment"],
+            ["case_id", "based_on_candidate_id"],
         ),
         "annotations": {"readOnlyHint": True},
     },
@@ -293,6 +298,10 @@ class McpServer:
 
 
 def main() -> int:
+    # MCP JSON-RPC is UTF-8, regardless of the Windows console/code page or parent environment.
+    sys.stdin.reconfigure(encoding="utf-8", errors="strict")
+    sys.stdout.reconfigure(encoding="utf-8", errors="strict", newline="\n")
+    sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
     parser = argparse.ArgumentParser(description="VesselPilot MCP stdio server")
     parser.add_argument("--case-root", type=Path)
     parser.add_argument("--input-root", action="append", type=Path, default=[])

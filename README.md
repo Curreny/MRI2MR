@@ -81,6 +81,18 @@ MRI2MR-core/
 
 ## 四、启动方法
 
+### Agnes Harness（Agent 页面，端口 4177）
+
+在本项目根目录的 PowerShell 中运行：
+
+```powershell
+.\start_agnes.ps1
+```
+
+脚本读取根目录的 `agnes.config.ps1`，自动设置 `AGH_HOME` 和 `AGNES_PROFILE`，并以本项目根目录作为 Agnes 工作区。默认打开 `http://127.0.0.1:4177`；如需其他端口，可运行 `.\start_agnes.ps1 -Port 4180`。修改模型账号、MCP 或 Skill 时，请沿用这个 `AGH_HOME`，避免连接到另一套实例。
+
+下面的 `start_core.bat` 启动的是 MRI2MR 原有 Web UI（端口 8000），与 Agnes Harness 分开运行。
+
 ### 方法一：一键启动（推荐）
 
 1. 启动 **Docker Desktop**（SynthSeg 模式需要）。

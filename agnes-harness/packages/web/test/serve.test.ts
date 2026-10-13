@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises'
 import { createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -538,6 +538,64 @@ it('returns multiple absolute folders without changing the workspace picker cont
       paths: ['C:\\dicom\\case-a', 'D:\\dicom\\case-b'],
     })
     expect((await fetch(`${server.url}/api/folder-picker?multiple=true`)).status).toBe(403)
+  } finally {
+    await server.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+it('prepares readable DICOM folders as data without an instruction and refuses missing inputs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agnes-web-dicom-input-'))
+  const caseRoot = join(root, "病例 '一'")
+  await mkdir(caseRoot)
+  await writeFile(join(caseRoot, 'sample.dcm'), 'synthetic DICOM fixture')
+  let paths = [caseRoot, caseRoot]
+  let cancelled = false
+  const port = await availablePort()
+  const server = await createWebServer({
+    root,
+    wsUrl: 'ws://127.0.0.1:4320',
+    port,
+    workspacePicker: {
+      available: async () => true,
+      pick: async () => ({ status: 'cancelled' }),
+      availableMany: async () => true,
+      pickMany: async () => (cancelled ? { status: 'cancelled' } : { status: 'selected', paths }),
+    },
+  })
+  const select = () =>
+    fetch(`${server.url}/api/dicom-picker`, { method: 'POST', headers: { Origin: server.url } })
+  try {
+    const result = await (await select()).json()
+    expect(result).toMatchObject({
+      status: 'selected',
+      attachment: { type: 'file', mimeType: 'application/vnd.agnes.input+json' },
+    })
+    expect(result.paths).toBeUndefined()
+    const manifest = JSON.parse(Buffer.from(result.attachment.data, 'base64').toString('utf8'))
+    expect(manifest.input).toEqual({
+      inputMode: 'local-directory',
+      paths: [await realpath(caseRoot)],
+      deidentificationConfirmed: false,
+    })
+    expect(await readFile(join(manifest.input.paths[0], 'sample.dcm'), 'utf8')).toBe(
+      'synthetic DICOM fixture',
+    )
+    expect(manifest.instruction).toBeUndefined()
+    paths = [join(root, 'missing')]
+    expect((await select()).status).toBe(422)
+    paths = [join(caseRoot, 'sample.dcm')]
+    expect((await select()).status).toBe(422)
+    cancelled = true
+    expect(await (await select()).json()).toEqual({ status: 'cancelled' })
+    expect(
+      (
+        await fetch(`${server.url}/api/dicom-picker`, {
+          method: 'POST',
+          headers: { Origin: 'https://other.invalid' },
+        })
+      ).status,
+    ).toBe(403)
   } finally {
     await server.close()
     await rm(root, { recursive: true, force: true })

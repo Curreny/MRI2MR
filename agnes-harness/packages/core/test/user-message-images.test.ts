@@ -44,6 +44,42 @@ it('snapshots attachment bytes before waiting for the enqueue lock', async () =>
 })
 
 it.each([
+  ['application/vnd.agnes.task+json', 1, true, true],
+  ['application/json', 1, false, false],
+  ['application/vnd.agnes.task+json', 2, false, false],
+  ['application/vnd.agnes.input+json', 1, false, true],
+  ['application/vnd.agnes.input+json', 2, false, false],
+] as const)(
+  'derives only explicit supported task attachments (%s, v%s) as user requests',
+  async (mimeType, version, recognized, inputRecognized) => {
+    const provider = fakeProvider([textTurn('received')])
+    const { session, log } = await openSession({ provider })
+    const attachment = {
+      ...file(
+        Buffer.from(
+          JSON.stringify({
+            version,
+            instruction: 'Reconstruct the selected cases',
+            input: { paths: ['C:\\病例\\case-01'] },
+          }),
+        ).toString('base64'),
+      ),
+      name: 'DICOM-1-cases.json',
+      mimeType,
+    }
+    const content = [{ type: 'text' as const, text: 'Explain the workflow only; do not run it.' }, attachment]
+    await session.enqueue('next-turn', { content, actor })
+    await session.run({ until: 'turn-end', signal: new AbortController().signal })
+    const request = JSON.stringify(provider.requests[0])
+    expect(request.includes('Reconstruct the selected cases')).toBe(recognized)
+    expect(request.includes('case-01')).toBe(inputRecognized)
+    expect(request).toContain('Explain the workflow only; do not run it.')
+    const rows = await log.scan({ type: 'user/message', limit: 10 })
+    expect(rows[0]?.data).toMatchObject({ content })
+  },
+)
+
+it.each([
   ['invalid Base64', [file('AB==')]],
   ['invalid name', [{ ...file(), name: 'bad\u0000name' }]],
   ['invalid MIME', [{ ...file(), mimeType: 'text/plain\nInjected' }]],

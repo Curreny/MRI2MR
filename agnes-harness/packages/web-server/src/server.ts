@@ -2,11 +2,13 @@ import { createHash, randomBytes } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { extname, isAbsolute, join, posix } from 'node:path'
+import { prepareDicomInput } from './dicom-input.js'
 import { VENDOR_ENTRY_NAMES } from './vendor-assets.js'
 
 export const DEFAULT_WEB_PORT = 4177
 export const WORKSPACE_PICKER_PATH = '/api/workspace-picker'
 export const FOLDER_PICKER_PATH = '/api/folder-picker'
+const DICOM_PICKER_PATH = '/api/dicom-picker'
 const HOST = '127.0.0.1'
 const FILES = new Set([
   'index.html',
@@ -403,9 +405,10 @@ export async function createWebServer(options: WebServerOptions): Promise<WebSer
         return
       }
       const requestUrl = new URL(request.url ?? '/', expectedOrigin)
-      if (requestUrl.pathname === WORKSPACE_PICKER_PATH || requestUrl.pathname === FOLDER_PICKER_PATH) {
-        const multiple = requestUrl.pathname === FOLDER_PICKER_PATH
-        const expectedPath = multiple ? FOLDER_PICKER_PATH : WORKSPACE_PICKER_PATH
+      if ([WORKSPACE_PICKER_PATH, FOLDER_PICKER_PATH, DICOM_PICKER_PATH].includes(requestUrl.pathname)) {
+        const dicom = requestUrl.pathname === DICOM_PICKER_PATH
+        const multiple = dicom || requestUrl.pathname === FOLDER_PICKER_PATH
+        const expectedPath = dicom ? DICOM_PICKER_PATH : multiple ? FOLDER_PICKER_PATH : WORKSPACE_PICKER_PATH
         const site = request.headers['sec-fetch-site']
         if (
           requestUrl.origin !== expectedOrigin.origin ||
@@ -486,7 +489,15 @@ export async function createWebServer(options: WebServerOptions): Promise<WebSer
             json(response, 503, { status: 'unavailable' })
             return
           }
-          json(response, result.status === 'unavailable' ? 503 : 200, result)
+          if (dicom && result.status === 'selected' && 'paths' in result) {
+            try {
+              const attachment = await prepareDicomInput(result.paths, controller.signal)
+              if (!controller.signal.aborted) json(response, 200, { status: 'selected', attachment })
+            } catch {
+              if (!controller.signal.aborted)
+                json(response, 422, { error: { code: 'DICOM_INPUT_UNREADABLE' } })
+            }
+          } else json(response, result.status === 'unavailable' ? 503 : 200, result)
         } finally {
           request.removeListener('aborted', abort)
           response.removeListener('close', abort)

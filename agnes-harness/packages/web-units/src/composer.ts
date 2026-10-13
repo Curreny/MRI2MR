@@ -157,6 +157,7 @@ export interface ComposerView {
 export interface ComposerHandle {
   getAttachmentBlocks(): readonly ComposerAttachmentBlock[]
   restoreAttachmentBlocks(attachments: readonly ComposerAttachmentBlock[]): void
+  appendAttachmentBlocks(attachments: readonly ComposerAttachmentBlock[]): void
   clearImageBlocks(): void
   focus(): void
   getDraft(): string
@@ -396,10 +397,10 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
   }, [publishAttachments])
 
   const restoreAttachmentBlocks = useCallback(
-    (blocks: readonly ComposerAttachmentBlock[]): void => {
+    (blocks: readonly ComposerAttachmentBlock[], append = false): void => {
       let decoded: ReturnType<typeof decodeSafeImages>
       try {
-        validateUserAttachments(blocks)
+        validateUserAttachments(append ? [...attachmentsRef.current, ...blocks] : blocks)
         decoded = decodeSafeImages(
           blocks.filter((block): block is ComposerImageBlock => block.type === 'image'),
           IMAGE_PREVIEW_LIMITS,
@@ -438,8 +439,8 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl)
         return
       }
-      clearImageBlocks()
-      publishAttachments(restored)
+      if (!append) clearImageBlocks()
+      publishAttachments(append ? [...attachmentsRef.current, ...restored] : restored)
     },
     [clearImageBlocks, publishAttachments],
   )
@@ -660,6 +661,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
         )
       },
       restoreAttachmentBlocks,
+      appendAttachmentBlocks: (blocks) => restoreAttachmentBlocks(blocks, true),
       hasPendingImages() {
         return pendingCountRef.current > 0
       },

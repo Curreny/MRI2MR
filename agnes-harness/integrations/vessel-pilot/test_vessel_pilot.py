@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -18,8 +19,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[2] / "scripts"))
 
-from job_runner import PipelineFailure, clear_conversion_outputs, conversion_result  # noqa: E402
-from service import Settings, VesselPilotInputError, VesselPilotService, atomic_json  # noqa: E402
+from job_runner import PipelineFailure, candidate_commands, clear_conversion_outputs, conversion_result  # noqa: E402
+from parameters import normalize_parameters  # noqa: E402
+from service import Settings, VesselPilotInputError, VesselPilotService, atomic_json, sha256_file  # noqa: E402
 from Vascular_cmd import DicomConverter  # noqa: E402
 
 
@@ -42,6 +44,10 @@ class VesselPilotServiceTest(unittest.TestCase):
         (dicom / "image001.dcm").write_bytes(b"synthetic-not-real-dicom")
         result = self.service.inspect_dicom_case(str(dicom), True, "case-test")
         return result["case_id"]
+
+    def test_runtime_discovery_uses_available_portable_python(self) -> None:
+        self.assertTrue(self.service.settings.python_exe.is_file())
+        self.assertEqual(self.service.settings.python_exe.name, "python.exe")
 
     def test_rejects_path_outside_allowlist(self) -> None:
         outside = self.root / "outside"
@@ -183,6 +189,8 @@ class VesselPilotServiceTest(unittest.TestCase):
                 self.assertEqual(raised.exception.code, "MISSING_REQUIRED_MODALITY")
                 self.assertEqual(raised.exception.details["missing_modalities"], [missing])
                 self.assertEqual(raised.exception.details["selection"], selection)
+                single = conversion_result(case_dir, "artery" if available == "MRA.nii" else "vein")
+                self.assertEqual(list(single["outputs"]), [available[:3].lower()])
 
         for name in ("MRA.nii", "MRV.nii"):
             nib.save(
@@ -194,6 +202,48 @@ class VesselPilotServiceTest(unittest.TestCase):
         self.assertEqual(set(result["artifacts"]), {"mra", "mrv"})
         self.assertTrue(all(len(item["sha256"]) == 64 for item in result["artifacts"].values()))
         self.assertEqual(result["selection"], selection)
+
+        # Format-only conversion succeeds with an arbitrary single 4D series, no MRA/MRV pair.
+        nifti_dir = patient / "nifti"
+        nifti_dir.mkdir()
+        output = nifti_dir / "series-01.nii"
+        nib.save(nib.Nifti1Image(np.zeros((2, 2, 2, 3), dtype=np.float32), np.eye(4)), output)
+        for path in (patient / "MRA.nii", patient / "MRV.nii"):
+            path.unlink()
+        result = conversion_result(case_dir, "nifti")
+        self.assertEqual(result["outputs"], {output.name: str(output)})
+        self.assertEqual(result["validation"][output.name]["shape"], [2, 2, 2, 3])
+        output.write_bytes(output.read_bytes()[:352])
+        with self.assertRaises(PipelineFailure) as raised:
+            conversion_result(case_dir, "nifti")
+        self.assertEqual(raised.exception.code, "INVALID_CONVERTED_NIFTI")
+        output.unlink()
+        with self.assertRaises(PipelineFailure) as raised:
+            conversion_result(case_dir, "nifti")
+        self.assertEqual(raised.exception.code, "NO_NIFTI_OUTPUT")
+
+    def test_nifti_mode_is_persisted_and_cannot_start_reconstruction(self) -> None:
+        case_id = self.create_case()
+        with patch.object(self.service, "_create_job", return_value={"job_id": "job-nifti", "status": "queued"}) as create:
+            self.service.start_conversion(case_id, conversion_mode="nifti")
+        self.assertEqual(create.call_args.args[2]["conversion_mode"], "nifti")
+        self.assertEqual(self.service.case_status(case_id)["conversion_mode"], "nifti")
+        self.assertFalse(self.service.case_status(case_id)["conversion_ready"])
+        with self.assertRaisesRegex(ValueError, "NIfTI-only"):
+            self.service.start_candidate(case_id, "baseline", 800, 0.85, 1000)
+        case_dir = self.cases / case_id
+        output = case_dir / "series.nii"
+        output.write_bytes(b"test output")
+        manifest = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+        manifest.update(conversion_status="succeeded", nifti_outputs={"series": str(output)})
+        atomic_json(case_dir / "case.json", manifest)
+        completed = self.service.start_conversion(case_id, conversion_mode="nifti")
+        self.assertEqual(completed["status"], "already_succeeded")
+        self.assertEqual(completed["outputs"], {"series": str(output)})
+        # Before candidates exist, a format-only case can prepare single-vessel inputs on request.
+        with patch.object(self.service, "_create_job", return_value={"job_id": "job-artery", "status": "queued"}) as create:
+            self.service.start_conversion(case_id, conversion_mode="artery")
+        self.assertEqual(create.call_args.args[2]["conversion_mode"], "artery")
 
     def test_conversion_rejects_same_source_invalid_nifti_and_clears_stale_outputs(self) -> None:
         case_dir = self.cases / "conversion-safety"
@@ -319,14 +369,51 @@ class VesselPilotServiceTest(unittest.TestCase):
             refused = self.service.choose_dicom_folder()
         self.assertEqual(refused["status"], "outside_input_roots")
 
-    def test_rejects_candidate_outside_parameter_allowlist(self) -> None:
+    def test_validates_custom_parameters_and_builds_only_requested_stage(self) -> None:
         case_id = self.create_case()
         patient = self.cases / case_id / "patient_input"
         patient.mkdir()
-        (patient / "MRA.nii").write_bytes(b"placeholder")
-        (patient / "MRV.nii").write_bytes(b"placeholder")
-        with self.assertRaisesRegex(ValueError, "vessel_threshold"):
-            self.service.start_candidate(case_id, "bad", 750, 0.85, 1000)
+        for name in ("MRA", "MRV"):
+            nib.save(nib.Nifti1Image(np.ones((4, 4, 4), dtype=np.float32), np.eye(4)), patient / f"{name}.nii")
+        manifest_path = self.cases / case_id / "case.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.update(conversion_status="succeeded", conversion_outputs={
+            name.lower(): {"size": (patient / f"{name}.nii").stat().st_size, "sha256": sha256_file(patient / f"{name}.nii")}
+            for name in ("MRA", "MRV")
+        })
+        atomic_json(manifest_path, manifest)
+        for target, supplied in (("artery", {"vessel_threshold": 750.5}), ("vein", {"mrv_weak_grow_tolerance": 0.87})):
+            with self.subTest(target=target), patch.object(self.service, "_create_job", return_value={"status": "queued"}) as create:
+                self.service.start_candidate(case_id, target, target=target, parameters=supplied)
+                payload = create.call_args.args[2]
+                self.assertEqual(payload["target"], target)
+                for key, value in supplied.items():
+                    self.assertEqual(payload["parameters"][key], value)
+                commands = candidate_commands({"case_dir": str(self.cases / case_id), "payload": payload,
+                                               "python_exe": "python", "vascular_script": "script"})
+                self.assertEqual(len(commands), 1)
+                self.assertEqual(commands[0][0], f"{target}_reconstruction")
+                self.assertEqual(commands[0][2].name, f"{target}.glb")
+                if target == "vein":
+                    self.assertIn(str(patient / "MRV.nii"), commands[0][1])
+                    self.assertNotIn(str(patient / "MRA.nii"), commands[0][1])
+                    prior = commands[0][1][-1]
+                    payload["parameters"]["mrv_frangi_sigmas_end"] = 8
+                    changed = candidate_commands({"case_dir": str(self.cases / case_id), "payload": payload,
+                                                  "python_exe": "python", "vascular_script": "script"})
+                    self.assertNotEqual(prior, changed[0][1][-1])
+        for target, invalid in (("artery", {"vessel_threshold": -1}), ("artery", {"vessel_threshold": float("nan")}),
+                                ("artery", {"vessel_threshold": True}), ("artery", {"mrv_weak_grow_tolerance": 0.8}),
+                                ("both", {"vessel_min_object_size": 1.5}), ("both", {"marching_cubes_level": 1}),
+                                ("both", {"shell": "bad"}), ("both", {"mrv_frangi_sigmas_start": 12})):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.service.start_candidate(case_id, "invalid", target=target, parameters=invalid)
+        with self.assertRaisesRegex(ValueError, "Conflicting"):
+            self.service.start_candidate(case_id, "invalid", vessel_threshold=750, parameters={"vessel_threshold": 850})
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            self.service.start_candidate(case_id, "artery", target="artery")
+        with self.assertRaisesRegex(ValueError, "existing candidates"):
+            self.service.start_conversion(case_id, conversion_mode="vein")
 
     def test_job_returns_authoritative_elapsed_time_and_polling_guidance(self) -> None:
         case_id = self.create_case()
@@ -400,6 +487,26 @@ class VesselPilotServiceTest(unittest.TestCase):
         final = self.service.finalize_case(case_id, "baseline")
         self.assertTrue(Path(final["artifacts"]["artery_glb"]).is_file())
         self.assertTrue(Path(final["artifacts"]["vein_glb"]).is_file())
+        for target in ("artery", "vein"):
+            with self.subTest(target=target):
+                single = candidate.parent / target
+                single.mkdir()
+                atomic_json(single / "candidate.json", {"target": target})
+                atomic_json(single / "parameters.json", normalize_parameters(target))
+                trimesh.creation.icosphere(subdivisions=1).export(single / f"{target}.glb")
+                report = self.service.evaluate_candidate(case_id, target)
+                self.assertEqual(report["conclusion"], "pass")
+                self.assertEqual(set(report["metrics"]), {target})
+                self.assertEqual(set(report["preview_montages"]), {target})
+                self.assertIsNone(report["vein_distribution_proxy"])
+                final = self.service.finalize_case(case_id, target)
+                self.assertEqual(final["target"], target)
+                self.assertEqual(set(final["checksums"]), {f"{target}_glb"})
+                other = "vein" if target == "artery" else "artery"
+                self.assertNotIn(f"{other}_glb", final["artifacts"])
+                (single / f"{target}.glb").write_bytes(b"changed")
+                with self.assertRaisesRegex(ValueError, "changed after evaluation"):
+                    self.service.finalize_case(case_id, target)
 
     def test_suggests_one_untried_parameter_change(self) -> None:
         case_id = self.create_case()
@@ -426,15 +533,100 @@ class VesselPilotServiceTest(unittest.TestCase):
         self.assertEqual(scalp["status"], "recommended")
         self.assertEqual(scalp["parameters"]["mrv_weak_grow_tolerance"], 0.88)
         self.assertIn("scalp/peripheral", scalp["reason"])
+        uncertain = self.service.suggest_parameters(case_id, "baseline", "too_dense", "uncertain")
+        self.assertEqual(uncertain["status"], "needs_human_review")
+        limited = self.service.suggest_parameters(case_id, "baseline", "too_dense", "good", max_candidates=1)
+        self.assertEqual(limited["status"], "budget_exhausted")
+        custom = self.service.suggest_parameters(case_id, "baseline", "too_dense", "good",
+                                                search_space={"vessel_threshold": [800, 850, 875]})
+        self.assertEqual(custom["parameters"]["vessel_threshold"], 850)
+        locked = self.service.suggest_parameters(case_id, "baseline", "too_dense", "good",
+                                                locked_parameters=["vessel_threshold"])
+        self.assertEqual(locked["status"], "needs_human_review")
+        # An arbitrary user threshold can be a baseline, and the absent vessel needs no assessment.
+        atomic_json(candidate / "candidate.json", {"target": "artery"})
+        atomic_json(candidate / "parameters.json", {"vessel_threshold": 750})
+        single = self.service.suggest_parameters(case_id, "baseline", artery_assessment="too_dense")
+        self.assertEqual(single["target"], "artery")
+        self.assertEqual(single["parameters"]["vessel_threshold"], 850)
+        self.assertNotIn("mrv_weak_grow_tolerance", single["parameters"])
+        trial = candidate.parent / "tried"
+        trial.mkdir()
+        atomic_json(trial / "candidate.json", {"target": "artery"})
+        atomic_json(trial / "parameters.json", single["parameters"])
+        exhausted = self.service.suggest_parameters(case_id, "baseline", artery_assessment="too_dense")
+        self.assertEqual(exhausted["status"], "needs_human_review")
 
 
 class McpProtocolTest(unittest.TestCase):
-    def test_stdio_initialize_list_and_call(self) -> None:
+    @unittest.skipUnless(
+        os.environ.get("VESSELPILOT_RUN_RECONSTRUCTION_TESTS") == "1",
+        "Real reconstruction requires explicit opt-in; default tests only verify flow and contracts",
+    )
+    def test_real_single_and_both_vessel_jobs_with_synthetic_volumes(self) -> None:
+        # Exercise the job runner and actual reconstruction script without patient data or long jobs.
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            settings = Settings.discover(HERE / "server.py", root / "cases", [root])
+            service = VesselPilotService(settings)
+            x, y, z = np.indices((24, 24, 24))
+            data = (1000 * np.exp(-((x - 12) ** 2 + (y - 12) ** 2) / 12) * (1 + 0.1 * np.sin(z))).astype(np.float32)
+            for target in ("artery", "vein", "both"):
+                with self.subTest(target=target):
+                    source = root / target
+                    source.mkdir()
+                    (source / "synthetic.dcm").write_bytes(b"synthetic registration fixture")
+                    service.inspect_dicom_case(str(source), True, target)
+                    case_dir = settings.case_root / target
+                    patient = case_dir / "patient_input"
+                    patient.mkdir()
+                    modalities = ("MRA",) if target == "artery" else ("MRV",) if target == "vein" else ("MRA", "MRV")
+                    for name in modalities:
+                        nib.save(nib.Nifti1Image(data, np.eye(4)), patient / f"{name}.nii")
+                    manifest_path = case_dir / "case.json"
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    manifest.update(conversion_status="succeeded", conversion_mode="vessel" if target == "both" else target,
+                                    conversion_outputs={name.lower(): {"size": (patient / f"{name}.nii").stat().st_size,
+                                    "sha256": sha256_file(patient / f"{name}.nii")} for name in modalities})
+                    atomic_json(manifest_path, manifest)
+                    supplied = {}
+                    if target != "vein":
+                        supplied.update(vessel_threshold=650, vessel_min_object_size=1, vessel_decimation_fraction=1)
+                    if target != "artery":
+                        supplied.update(mrv_frangi_sigmas_end=3, mrv_strong_seed_percentile=80,
+                                        mrv_weak_seed_percentile=60, mrv_strong_grow_tolerance=0.7,
+                                        mrv_weak_grow_tolerance=0.5, mrv_post_process_min_size=1,
+                                        min_object_size=1, mesh_decimation_fraction=1)
+                    # Capture the service's public execution payload, then run it synchronously for bounded cleanup.
+                    with patch.object(service, "_create_job", return_value={"job_id": "synthetic"}) as create:
+                        service.start_candidate(target, "run", target=target, parameters=supplied)
+                    job_dir = case_dir / "jobs" / "synthetic"
+                    job_dir.mkdir(parents=True)
+                    atomic_json(job_dir / "spec.json", {"kind": "candidate", "case_id": target,
+                                "case_dir": str(case_dir), "python_exe": sys.executable,
+                                "vascular_script": str(settings.vascular_script), "payload": create.call_args.args[2]})
+                    atomic_json(job_dir / "state.json", {"job_id": "synthetic", "case_id": target, "status": "queued"})
+                    process = subprocess.run([sys.executable, str(HERE / "job_runner.py"), "--spec", str(job_dir / "spec.json")],
+                                             capture_output=True, text=True, encoding="utf-8", timeout=45,
+                                             env={**os.environ, "PYTHONUTF8": "1"})
+                    state = json.loads((job_dir / "state.json").read_text(encoding="utf-8"))
+                    self.assertEqual(process.returncode, 0, state.get("error", process.stderr))
+                    self.assertEqual(state["status"], "succeeded")
+                    expected = {"artery", "vein"} if target == "both" else {target}
+                    self.assertEqual({key[:-4] for key in state["result"] if key.endswith("_glb")}, expected)
+                    report = service.evaluate_candidate(target, "run")
+                    self.assertEqual(report["conclusion"], "pass")
+                    self.assertEqual(set(report["metrics"]), expected)
+                    final = service.finalize_case(target, "run")
+                    self.assertEqual(final["target"], target)
+
+    def test_stdio_initialize_list_and_call(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "输出_🧠"
+            root.mkdir()
             inputs = root / "inputs"
             inputs.mkdir()
-            dicom = inputs / "dicom"
+            dicom = inputs / "数据集_病例"
             dicom.mkdir()
             (dicom / "one.dcm").write_bytes(b"synthetic")
             process = subprocess.Popen(
@@ -451,14 +643,17 @@ class McpProtocolTest(unittest.TestCase):
                 stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
+                env={**os.environ, "PYTHONUTF8": "0", "PYTHONIOENCODING": "gbk"},
             )
 
             def call(request: dict) -> dict:
                 assert process.stdin is not None
                 assert process.stdout is not None
-                process.stdin.write(json.dumps(request) + "\n")
+                process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
                 process.stdin.flush()
-                return json.loads(process.stdout.readline())
+                response = json.loads(process.stdout.readline())
+                self.assertEqual(response.get("id"), request["id"])
+                return response
 
             try:
                 initialized = call(

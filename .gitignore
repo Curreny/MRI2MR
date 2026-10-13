@@ -12,3 +12,5 @@ logs/
 __pycache__/
 *.py[cod]
 *.log
+
+node_modules/
