@@ -35,7 +35,12 @@ export function normalizeApproval(value: RawApproval): ApprovalAnswer | Pending 
   const answer = typeof value === 'string' ? { verdict: value } : value
   if (!answer || typeof answer !== 'object' || !VERDICTS.has(answer.verdict as string)) return null
   const reason = (answer as { reason?: unknown }).reason
-  return isApprovalReason(reason) ? { verdict: answer.verdict, reason } : { verdict: answer.verdict }
+  const selectionId = (answer as ApprovalAnswer).selectionId
+  return {
+    verdict: answer.verdict,
+    ...(isApprovalReason(reason) ? { reason } : {}),
+    ...(typeof selectionId === 'string' ? { selectionId } : {}),
+  }
 }
 
 /** The result code and the words the model reads when a call is refused at the approval step. */
@@ -54,7 +59,9 @@ export function approvalRefusal(
     reason === 'user_rejected'
       ? 'the user rejected this action; do not retry the same call without asking'
       : reason === 'timeout'
-        ? `no one answered the approval within ${Math.round(timeoutMs / 1000)}s, so the action was not run; ask the user before trying again`
+        ? timeoutMs === 0
+          ? 'the approval request ended without an answer, so the action was not run; ask the user before trying again'
+          : `no one answered the approval within ${Math.round(timeoutMs / 1000)}s, so the action was not run; ask the user before trying again`
         : reason === 'policy_denied'
           ? 'blocked by the command policy'
           : reason === 'subagent_scope'

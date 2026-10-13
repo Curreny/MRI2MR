@@ -746,6 +746,9 @@ class McpProtocolTest(unittest.TestCase):
                     [block["type"] for block in evaluated["result"]["content"]],
                     ["text", "image", "image"],
                 )
+                preview = json.loads(evaluated["result"]["content"][0]["text"])["visualization"]
+                self.assertEqual(preview["candidate_id"], "baseline")
+                self.assertEqual(len(preview["images"]), 2)
                 self.assertEqual(
                     evaluated["result"]["structuredContent"]["conclusion"], "pass"
                 )

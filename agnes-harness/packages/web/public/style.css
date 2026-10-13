@@ -2298,8 +2298,11 @@ button.trace-gantt-bar:focus-visible {
 }
 #approval {
   width: min(calc(100% - 2rem), var(--chat-content-width));
+  max-height: min(28rem, 45dvh);
   margin: 0 auto 0.75rem;
   padding: 0.75rem 1rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 [data-agnes-region="approval"] {
   overflow: hidden;

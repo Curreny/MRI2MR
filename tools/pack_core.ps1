@@ -202,12 +202,7 @@ foreach ($Name in @(
 
 foreach ($File in @(
     "requirements-webui.txt",
-    "README_USER_GUIDE.md",
-    "README_WEBUI_USAGE_V1.md",
-    "README_WEBUI_TASKS.md",
-    "README_WEBUI_OPTIMIZATION_V2.md",
-    "README_WEBUI_OPTIMIZATION_V3.md",
-    "README_WEBUI_OPTIMIZATION_V4.md"
+    "README_USER_GUIDE.md"
 )) {
     $Source = Join-Path $ProjectRoot $File
     if (Test-Path -LiteralPath $Source) {

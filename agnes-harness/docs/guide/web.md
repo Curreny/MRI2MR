@@ -87,6 +87,12 @@ Fold turns or tool calls, search the records, or load earlier history as needed.
 
 <a id="日常管理"></a>
 
+## Human approval and choices
+
+Approvals appear as a card above the chat composer, alongside the conversation rather than covering the page. The card shows the question, context and available choices. The selected option returns to the current task, which continues without another chat message. `request_user_input` supports workflow decisions such as deidentification confirmation and sequence selection; a choice does not grant other tool permissions.
+
+The defaults `approval.timeout_ms: 0` and `tools.timeouts.request_user_input: 0` wait without a time limit. Explicit positive approval timeouts still reject on expiry. Keep the page and backend connected while answering. Cancellation, stopping, session switching or a disconnected transport cancels/refuses the live request; pending approval cards are not durably recovered across page refreshes or daemon restarts.
+
 ## Everyday management
 
 Settings manages model accounts, plugins, Skills/MCP, appearance, and Computer Use. Available actions depend on backend capabilities and permissions. Installed plugins still require trust and enablement; see [plugin management](packages.md). Reopen history from the sidebar, or use the archive view for archived tasks. Archiving does not delete session history.

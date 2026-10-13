@@ -2,6 +2,7 @@
 
 import { createElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { liveApprovalCard } from '../src/approval-card.js'
 import { APPROVAL_SLOT } from '../src/region-slots.js'
 import { mountRenderedIndex, resetWebDom } from './web-dom-fixture.js'
 
@@ -10,6 +11,29 @@ import { mountRenderedIndex, resetWebDom } from './web-dom-fixture.js'
 const committed = { timeout: 5_000 }
 
 describe('rendered approval region', () => {
+  it('shows human choice context and option explanations without a session grant', () => {
+    const card = liveApprovalCard(
+      {
+        kind: 'other',
+        rawInput: { patient_path: 'private' },
+        _meta: {
+          'ai.agnes.harness': {
+            input: true,
+            context: '候选序列 A/B',
+            options: [
+              { id: 'a', label: 'A', description: '三维 MRA' },
+              { id: 'b', label: 'B', description: '停止' },
+            ],
+          },
+        },
+      },
+      (key) => key,
+    )
+    expect(card).toMatchObject({ input: true, preview: '候选序列 A/B\n\nA：三维 MRA\nB：停止' })
+    expect(card.sessionLabel).toBeUndefined()
+    expect(card.preview).not.toContain('private')
+  })
+
   let runtime: Awaited<ReturnType<typeof mountRenderedIndex>> | undefined
 
   afterEach(async () => {
@@ -46,6 +70,9 @@ describe('rendered approval region', () => {
       expect(approval?.querySelector('h2')?.textContent).toBe('需要你的确认')
       expect(approval?.querySelector('pre')?.textContent).toBe('{"path":"README.md"}')
       expect(approval?.querySelectorAll<HTMLButtonElement>('.approval-actions button')).toHaveLength(2)
+      expect(approval?.nextElementSibling?.id).toBe('composer-mount')
+      expect(approval?.querySelector('[data-approval-key]')?.tagName).toBe('DIV')
+      expect(approval?.querySelector('dialog')).toBeNull()
     }, committed)
 
     const reject = approval?.querySelector<HTMLButtonElement>('.approval-actions button:nth-child(2)')

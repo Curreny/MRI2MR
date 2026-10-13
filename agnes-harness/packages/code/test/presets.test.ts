@@ -202,7 +202,18 @@ describe('standard.yaml', () => {
     expect(doc.surfaces).toEqual(['cli', 'sdk', 'acp', 'daemon'])
     expect(doc.disclosure).toBe('standard')
     expect(doc.tools).toEqual({
-      core: ['read', 'write', 'edit', 'shell', 'grep', 'find', 'ls', 'todo', 'web_fetch'],
+      core: [
+        'read',
+        'write',
+        'edit',
+        'shell',
+        'grep',
+        'find',
+        'ls',
+        'todo',
+        'web_fetch',
+        'request_user_input',
+      ],
     })
     expect(doc.mcp).toEqual({ defer: true })
     expect(doc.sandbox).toEqual({ level: 'L0', required: false, on_unavailable: 'allow' })

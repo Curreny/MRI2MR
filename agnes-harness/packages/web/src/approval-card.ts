@@ -11,6 +11,7 @@ export const PREVIEW_LIMIT = 32 * 1024
 const LEADING = ['path', 'file_path', 'command', 'url', 'pattern', 'query']
 
 export type ApprovalCard = {
+  input?: boolean
   impact: string
   preview?: string
   /** Set when part of the call is not on the card. */
@@ -56,6 +57,21 @@ function impactOf(tool: string | undefined, kind: unknown, input: unknown, t: Tr
 }
 
 export function liveApprovalCard(toolCall: Record<string, unknown>, t: Translate): ApprovalCard {
+  const meta = toolCall._meta
+  const harness = isRecord(meta) ? meta['ai.agnes.harness'] : undefined
+  if (isRecord(harness) && harness.input === true) {
+    const descriptions = Array.isArray(harness.options)
+      ? harness.options
+          .filter(isRecord)
+          .filter((option) => typeof option.description === 'string')
+          .map((option) => `${String(option.label)}：${String(option.description)}`)
+          .join('\n')
+      : ''
+    const preview = [typeof harness.context === 'string' ? harness.context : '', descriptions]
+      .filter(Boolean)
+      .join('\n\n')
+    return { input: true, impact: t('app.approval.waitingInput'), ...(preview ? { preview } : {}) }
+  }
   const tool = toolOf(toolCall)
   const input = toolCall.rawInput
   const impact = impactOf(tool, toolCall.kind, input, t)

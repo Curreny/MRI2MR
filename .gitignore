@@ -1,16 +1,24 @@
-# Separate project; never include it in the MRI2MR repository.
-# agnes-harness/
+# Agnes Harness is currently tracked as part of this repository.
+# Its local runtime and build outputs are ignored by agnes-harness/.gitignore.
 venv/
 mri_reface/
 
-# Generated patient-study workspace data.
+# Generated patient-study workspace data and packaging output.
 /workspace/
 logs/
+/dist/
+/README_CORE.md
+/PACKING_REPORT_CORE.txt
 
 # Local editor and Python cache files.
 .vscode/
 __pycache__/
 *.py[cod]
 *.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+*.egg-info/
 
 node_modules/

@@ -210,13 +210,23 @@ class McpServer:
             if not isinstance(arguments, dict):
                 raise ValueError("Tool arguments must be an object")
             data = self.tool_map[name](**arguments)
+            from visualization import tool_visualization
+
+            # Preview failures must never turn a successful medical-file job into a failed job.
+            try:
+                visualization, image_blocks = tool_visualization(self.service, name, arguments, data)
+            except Exception:
+                visualization, image_blocks = None, []
+            if visualization is not None:
+                data = {"visualization": visualization, **data}
             content: list[dict[str, Any]] = [
                 {
                     "type": "text",
                     "text": json.dumps(data, ensure_ascii=False, separators=(",", ":")),
                 }
             ]
-            if name == "evaluate_vessel_candidate":
+            content.extend(image_blocks)
+            if name == "evaluate_vessel_candidate" and visualization is None:
                 for vessel, path_value in data.get("preview_montages", {}).items():
                     path = Path(path_value)
                     if path.is_file():

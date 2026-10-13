@@ -31,3 +31,4 @@ export {
   type ConversationTurnFeedback,
 } from './conversation/turn-actions.js'
 export { ConversationUsage, type ConversationUsageProps } from './conversation/usage.js'
+export { VesselPreview, type VesselVisualization } from './conversation/vessel-preview.js'

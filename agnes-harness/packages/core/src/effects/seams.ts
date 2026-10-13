@@ -1,4 +1,4 @@
-import type { FsEntry, FsStat, ToolMeta } from '@agnes/extension-api'
+import type { FsEntry, FsStat, ToolMeta, UserInputRequest } from '@agnes/extension-api'
 import type { Actor, ApprovalGrant, ApprovalMode, ApprovalVerdict } from '@agnes/protocol'
 // ArtifactRef is defined once, in reduce/shapes.ts, and is used here without re-exporting it: two
 // star-export sources for one name make the package's root surface ambiguous about which it means.
@@ -25,10 +25,11 @@ export type ApprovalReason =
  * A verdict with the reason behind it. Seams and prompters may return it in place of a bare
  * `Verdict`; the bare string stays valid and means "no reason given".
  */
-export type ApprovalAnswer = { verdict: Verdict; reason?: ApprovalReason }
+export type ApprovalAnswer = { verdict: Verdict; reason?: ApprovalReason; selectionId?: string }
 export type ApprovalRequest = {
   requestId: string
-  kind: 'tool' | 'budget' | 'unknown-outcome' | 'refine'
+  kind: 'tool' | 'budget' | 'unknown-outcome' | 'refine' | 'input'
+  input?: UserInputRequest
   sessionKey: string
   stepId: string
   toolUseId?: string
@@ -38,6 +39,7 @@ export type ApprovalRequest = {
   actor: Actor
   taint: boolean
   bindingHash: string
+  /** Empty means wait until the human answers or the request is cancelled. */
   deadline: string
   scope: string
   profileHash?: string | null
@@ -64,7 +66,7 @@ export type ApprovalWorkspaceBinding = Readonly<{ root: string }>
 export interface ApprovalSeam {
   /** Dynamic seams fit the shared implementation to the session before it enters an invocation. */
   forWorkspace?(workspace: ApprovalWorkspaceBinding): ApprovalSeam | Promise<ApprovalSeam>
-  ask(req: ApprovalRequest): Promise<Verdict | ApprovalAnswer | Pending>
+  ask(req: ApprovalRequest, opts?: { signal: AbortSignal }): Promise<Verdict | ApprovalAnswer | Pending>
   resume(
     ticket: string,
     verdict: Verdict,

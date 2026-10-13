@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { LocalEndpoint } from '../src/local/endpoint.js'
 import { type AskOutcome, PrompterRouter } from '../src/local/prompter.js'
 
@@ -34,6 +34,78 @@ const mk = (o: Partial<ConstructorParameters<typeof PrompterRouter>[0]> = {}) =>
 }
 
 describe('PrompterRouter', () => {
+  it.each(['yes', 'input-cancel', 'unoffered'])(
+    'routes human input without a deadline and validates the selected option: %s',
+    async (choice) => {
+      vi.useFakeTimers()
+      const { ep, r } = mk()
+      try {
+        ep.conn.capabilities.permission = true
+        const it = ep.notifications[Symbol.asyncIterator]()
+        let settled = false
+        const p = r
+          .ask(
+            {
+              ...req,
+              kind: 'input',
+              tool: undefined,
+              deadline: '',
+              input: {
+                question: '已脱敏？',
+                context: '本次目录',
+                options: [
+                  { id: 'yes', label: '已脱敏，继续' },
+                  { id: 'stop', label: '停止' },
+                ],
+              },
+            } as never,
+            { signal: never },
+          )
+          .then((value) => {
+            settled = true
+            return value
+          })
+        const message = (await it.next()).value as {
+          id: string
+          params: {
+            _meta: unknown
+            options: Array<{ optionId: string; name: string }>
+            toolCall: { _meta: unknown }
+          }
+        }
+        expect(message.params._meta).toEqual({ 'ai.agnes.harness': { requestId: 'r1' } })
+        expect(message.params.options.map((option) => option.name)).toEqual([
+          '已脱敏，继续',
+          '停止',
+          'Cancel',
+        ])
+        expect(message.params.toolCall._meta).toMatchObject({
+          'ai.agnes.harness': { input: true, context: '本次目录' },
+        })
+        await vi.advanceTimersByTimeAsync(86_400_001)
+        expect(settled).toBe(false)
+        await ep.handle({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            outcome: { outcome: 'selected', optionId: choice === 'yes' ? 'input:yes' : choice },
+          },
+        })
+        await expect(p).resolves.toEqual(
+          choice === 'yes'
+            ? { verdict: 'allowed-once', selectionId: 'yes' }
+            : choice === 'input-cancel'
+              ? 'cancelled'
+              : 'rejected',
+        )
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        await ep.close()
+        vi.useRealTimers()
+      }
+    },
+  )
+
   it('prefers the local prompter', async () => {
     const { r, log } = mk({ local: { ask: async () => 'allowed-once' } })
     await expect(r.ask(req as never, { signal: never })).resolves.toBe('allowed-once')

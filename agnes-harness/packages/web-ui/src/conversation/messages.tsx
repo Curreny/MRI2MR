@@ -47,6 +47,8 @@ export interface ConversationMessagesProps {
   renderSlot?: (node: Extract<UINode, { kind: 'slot' }>) => ReactNode
   /** The upper Web layer owns DSH registration, claims, and fallback visibility. */
   renderNode?: (node: UINode, native: ReactNode) => ReactNode
+  /** Host-selected result cards remain visible when the execution trace is collapsed. */
+  keepNodeVisible?: (node: UINode) => boolean
 }
 
 type ConversationMessageContextValue = {
@@ -796,7 +798,8 @@ function Turn({
       (node) =>
         node.id !== turn.finalAssistantId &&
         !isEmptyStreamingAssistant(node) &&
-        !(node.kind === 'approval' && node.state === 'pending'),
+        !(node.kind === 'approval' && node.state === 'pending') &&
+        !props.keepNodeVisible?.(node),
     ).length + (finalThinking ? 1 : 0)
   const ordered = [...others].sort((a, b) => {
     const rank = (node: UINode) =>
@@ -876,11 +879,22 @@ function Turn({
           {ordered.map((node) => {
             const final = node.id === turn.finalAssistantId
             const attention = node.kind === 'approval' && node.state === 'pending'
+            const visibleResult = props.keepNodeVisible?.(node) ?? false
             return (
               <div
                 key={node.id}
-                className={final ? 'turn-final' : attention ? 'turn-attention' : 'turn-process-body'}
-                hidden={isEmptyStreamingAssistant(node) || (!final && !attention && !processOpen)}
+                className={
+                  final
+                    ? 'turn-final'
+                    : attention
+                      ? 'turn-attention'
+                      : visibleResult
+                        ? 'turn-visual-result'
+                        : 'turn-process-body'
+                }
+                hidden={
+                  isEmptyStreamingAssistant(node) || (!final && !attention && !visibleResult && !processOpen)
+                }
               >
                 <Message
                   node={node}

@@ -48,6 +48,67 @@ const workspacePort = (seams: ReturnType<typeof fakeSeams>, release: () => void 
   }))
 
 describe('SeamRuntime', () => {
+  it('keeps an approval pending beyond a day with no deadline and still allows cancellation', async () => {
+    vi.useFakeTimers()
+    try {
+      let resolve!: (answer: 'allowed-once') => void
+      const seams = fakeSeams({
+        approval: {
+          ask: () =>
+            new Promise<'allowed-once'>((done) => {
+              resolve = done
+            }),
+          resume: async () => null,
+        },
+      })
+      const rt = new SeamRuntime(seams, presetDefaults(), {
+        clock: () => Date.now(),
+        onFailure: () => undefined,
+      })
+      let settled = false
+      const pending = rt.approvalAsk({ ...req, deadline: '' }, sig()).then((answer) => {
+        settled = true
+        return answer
+      })
+      await vi.advanceTimersByTimeAsync(86_400_001)
+      expect(settled).toBe(false)
+      resolve('allowed-once')
+      await expect(pending).resolves.toBe('allowed-once')
+      const ac = new AbortController()
+      const cancelled = rt.approvalAsk({ ...req, deadline: '' }, ac.signal)
+      ac.abort()
+      await expect(cancelled).resolves.toEqual({ verdict: 'cancelled', reason: 'stopped' })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('returns only offered human choices and never accepts an automatic allow as a choice', async () => {
+    const input = {
+      question: '选择序列',
+      options: [
+        { id: 'mra', label: 'MRA' },
+        { id: 'stop', label: '停止' },
+      ],
+    }
+    const request = { ...req, kind: 'input' as const, input, deadline: '' }
+    for (const [answer, expected] of [
+      [
+        { verdict: 'allowed-once', selectionId: 'mra' },
+        { verdict: 'allowed-once', selectionId: 'mra' },
+      ],
+      [{ verdict: 'allowed-once', selectionId: 'unknown' }, { verdict: 'rejected' }],
+      ['allowed-once', { verdict: 'rejected' }],
+      ['allowed-session', { verdict: 'rejected' }],
+      ['cancelled', { verdict: 'cancelled' }],
+    ] as const) {
+      const seams = fakeSeams({ approval: { ask: async () => answer as never, resume: async () => null } })
+      const rt = new SeamRuntime(seams, presetDefaults(), { clock: () => 0, onFailure: () => undefined })
+      await expect(rt.approvalAsk(request, sig())).resolves.toEqual(expected)
+    }
+  })
+
   it('maps approval failures to rejected and reports which seam and op failed', async () => {
     const failures: unknown[] = []
     const seams = fakeSeams({

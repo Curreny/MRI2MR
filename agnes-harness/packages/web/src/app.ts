@@ -1000,6 +1000,14 @@ function renderApproval(): void {
       ...(card?.sessionLabel === undefined ? {} : { allow_always: card.sessionLabel }),
     }
     for (const option of request.request.options) {
+      if (card?.input) {
+        decide(
+          `live:${option.optionId}`,
+          option.optionId === 'input-cancel' ? t('app.approval.cancelInput') : option.name,
+          async () => request.finish({ optionId: option.optionId }),
+        )
+        continue
+      }
       if (option.name === 'allow_always' && labels.allow_always === undefined) continue
       decide(`live:${option.name}`, labels[option.name] ?? option.name, async () =>
         request.finish({ optionId: option.optionId }),
@@ -1016,7 +1024,7 @@ function renderApproval(): void {
   }
   approvalRuntime.render({
     key,
-    title: t('app.approval.title'),
+    title: card?.input ? t('app.approval.inputTitle') : t('app.approval.title'),
     summary,
     impact,
     ...(card?.warning === undefined ? {} : { warning: card.warning }),

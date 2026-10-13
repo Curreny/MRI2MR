@@ -32,7 +32,7 @@ describe('preset view', () => {
     })
     expect(d.approval).toEqual({
       onTimeout: 'rejected',
-      timeoutMs: 60000,
+      timeoutMs: 0,
       onUnavailable: 'deny',
       pendingTtlMs: 86400000,
     })
@@ -43,7 +43,11 @@ describe('preset view', () => {
       agentCallable: true,
     })
     expect(d.sandbox).toEqual({ onUnavailable: 'deny' })
-    expect(d.tools).toEqual({ timeoutMs: 120000, timeouts: {}, outputMaxBytes: DEFAULT_OUTPUT_MAX_BYTES })
+    expect(d.tools).toEqual({
+      timeoutMs: 120000,
+      timeouts: { request_user_input: 0 },
+      outputMaxBytes: DEFAULT_OUTPUT_MAX_BYTES,
+    })
     expect(d.verifier).toEqual({ timeoutMs: 30000, defaultTier: 0 })
     expect(d.repair).toEqual({ timeoutMs: 10000 })
     expect(d.completionGate).toEqual({ minItems: 3 })
@@ -70,7 +74,7 @@ describe('preset view', () => {
     const a = presetDefaults()
     a.tools.timeouts.shell = 1
     a.model.route.primary = 'edited'
-    expect(presetDefaults().tools.timeouts).toEqual({})
+    expect(presetDefaults().tools.timeouts).toEqual({ request_user_input: 0 })
     expect(presetDefaults().model.route).toEqual({ primary: 'default' })
   })
 
@@ -96,7 +100,7 @@ describe('preset view', () => {
     // Untouched siblings keep their defaults rather than becoming undefined.
     expect(v.budget.onExceed).toBe('quote')
     expect(v.budget.preflight).toBe('estimate')
-    expect(v.approval.timeoutMs).toBe(60000)
+    expect(v.approval.timeoutMs).toBe(0)
     expect(v.tools.timeoutMs).toBe(120000)
   })
 
@@ -146,7 +150,7 @@ describe('preset view', () => {
       budget: { preflight: 'count', perRequestCap: 13, onExceed: 'deny', maxSteps: 17 },
       approval: { onTimeout: 'rejected', timeoutMs: 19, onUnavailable: 'park', pendingTtlMs: 23 },
       sandbox: { onUnavailable: 'allow' },
-      tools: { timeoutMs: 29, outputMaxBytes: 9000, timeouts: { shell: 31 } },
+      tools: { timeoutMs: 29, outputMaxBytes: 9000, timeouts: { request_user_input: 0, shell: 31 } },
       verifier: { timeoutMs: 37, defaultTier: 2 },
       repair: { timeoutMs: 41 },
       completionGate: { minItems: 43 },

@@ -18,6 +18,7 @@ import {
 import { type ReactNode, useSyncExternalStore } from 'react'
 import type { ClaimResolver } from './client-modules/boot.js'
 import { toolIconReact } from './tool-icon.js'
+import { hasVesselVisualization, VesselToolPreview } from './vessel-tool-preview.js'
 
 type SlotNode = Extract<UINode, { kind: 'slot' }>
 const noSessionSubscription = () => () => undefined
@@ -140,6 +141,7 @@ export function WebConversationMessages({
     () => registry?.sessionId,
   )
   const props: ConversationMessagesProps = {
+    keepNodeVisible: hasVesselVisualization,
     t: (key, vars) => locale?.t(key, vars) ?? key,
     ...(turns ? { turns } : {}),
     ...(visibleNodeIds ? { visibleNodeIds } : {}),
@@ -164,12 +166,14 @@ export function WebConversationMessages({
       />
     ),
     renderTool: (node) => (
-      <ConversationToolCard
-        key={node.id}
-        node={node}
-        icon={toolIconReact(node.name)}
-        t={(key, vars) => locale?.t(key, vars) ?? key}
-      />
+      <div key={node.id}>
+        <ConversationToolCard
+          node={node}
+          icon={toolIconReact(node.name)}
+          t={(key, vars) => locale?.t(key, vars) ?? key}
+        />
+        <VesselToolPreview node={node} session={session} resources={resources} locale={locale} />
+      </div>
     ),
     renderSlot: (node) => (
       <SlotLeaf

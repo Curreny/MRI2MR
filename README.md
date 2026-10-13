@@ -47,7 +47,7 @@ MRI2MR-core/
 ├── template/             # 模板文件（DK_Regions.txt、DK_Lobes.txt、ROI_ED_Filter.nii.gz）
 ├── dcm2niix_win/         # dcm2niix 可执行文件（DICOM 转 NIfTI）
 ├── dcmtk-3.7.0-win64-dynamic/  # DCMTK 工具（DICOM 解压）
-├── runtime/python/       # 可移植 Python 环境（BrainAAL conda 环境）
+├── runtime/python/       # 打包产物中的可移植 Python 环境（源码仓库未跟踪）
 ├── workspace/            # 病人工作区根目录（每次运行生成子目录）
 ├── logs/                 # 运行日志
 ├── start_core.bat        # 一键启动脚本
@@ -63,10 +63,10 @@ MRI2MR-core/
 | **Windows 10/11** | 主操作系统 |
 | **MATLAB（含 SPM12）** | 用于 SPM 分割；路径可在 `config/app_settings.json` 中配置 |
 | **Docker Desktop** | 用于运行 SynthSeg 容器（`pwesp/synthseg:py38`） |
-| **可移植 Python 环境** | 已内置于 `runtime/python/BrainAAL/`，无需额外安装 |
+| **可移植 Python 环境** | `start_core.bat` 需要 `runtime/python/BrainAAL/python.exe`；当前源码仓库未跟踪该环境 |
 | **DICOM 文件** | 包含 T1、MRA、MRV、DTI 等序列的 DICOM 文件夹 |
 
-> 从 GitHub 克隆时，请先安装 **Git LFS**，并执行 `git lfs install` 后再运行 `git clone`。`runtime/` 由 Git LFS 下载，目标电脑无需单独安装 Python。
+> 当前 Git 仓库未跟踪 `runtime/` 文件。`.gitattributes` 中的 Git LFS 规则不会自行提供 Python 环境；克隆后需要另行准备运行环境或使用已打好的 Core 包。`requirements-webui.txt` 只覆盖 WebUI 依赖，不能重建全部影像处理依赖。
 
 ### 可配置路径（`config/app_settings.json`）
 
@@ -90,6 +90,23 @@ MRI2MR-core/
 ```
 
 脚本读取根目录的 `agnes.config.ps1`，自动设置 `AGH_HOME` 和 `AGNES_PROFILE`，并以本项目根目录作为 Agnes 工作区。默认打开 `http://127.0.0.1:4177`；如需其他端口，可运行 `.\start_agnes.ps1 -Port 4180`。修改模型账号、MCP 或 Skill 时，请沿用这个 `AGH_HOME`，避免连接到另一套实例。
+
+Agent 的后端执行日志默认写入 `agnes-harness/agh-home/logs/agent/agent.jsonl`，无需打开网页即可检查。日志包含会话 ID、回合、步骤、工具调用及结果、耗时、VesselPilot 的病例/候选/作业 ID、有效参数、调整原因和错误摘要。DEBUG 另外记录模型请求与内部执行事件；INFO 记录正常流程；WARN 记录人工等待、取消或异常停止；ERROR 记录工具、模型或会话失败。不直接复制原始对话、推理正文、完整工具入参和图片数据，完整执行事实仍由原会话记录保存。
+
+```powershell
+# 启动并记录详细日志；已有 daemon 需重启后才采用新的日志级别/目录。
+.\start_agnes.ps1 -LogLevel Debug
+
+# 另开终端，实时查看所有级别（Ctrl+C 退出）。
+.\show_agent_logs.ps1 -Level Debug -Follow
+
+# 只看警告和错误，或定位特定会话/工具。
+.\show_agent_logs.ps1 -Level Warn -Tail 100
+.\show_agent_logs.ps1 -SessionId '<会话ID>' -Tool get_vessel_job -Follow
+.\show_agent_logs.ps1 -Event tool/result -AsJson
+```
+
+`-Level` 是显示的最低级别；不能恢复启动时未记录的 DEBUG 事件。`start_agnes.ps1 -LogDirectory <目录>` 可修改日志目录，查看时同样传入 `show_agent_logs.ps1 -LogDirectory <目录>`。直接启动 Harness 时可设置 `AGNES_AGENT_LOG_LEVEL=debug|info|warn|error|off` 和 `AGNES_AGENT_LOG_DIR`；未设置目录则使用当前 profile 的 `<dataDir>/logs/agent`。日志为 UTF-8 JSONL，单文件默认 10 MiB，轮转保留 5 个备份；实时查看命令会继续跟随新文件。写入失败不会中断 Agent。
 
 下面的 `start_core.bat` 启动的是 MRI2MR 原有 Web UI（端口 8000），与 Agnes Harness 分开运行。
 

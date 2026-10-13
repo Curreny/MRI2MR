@@ -606,7 +606,10 @@ export async function approveAndExecute(
         policyVersion: policy.policyVersion,
         ...(durableBinding ? { profileHash: durableBinding.profileHash } : {}),
         options,
-        deadline: new Date(s.d.clock() + s.preset.approval.timeoutMs).toISOString(),
+        deadline:
+          s.preset.approval.timeoutMs === 0
+            ? ''
+            : new Date(s.d.clock() + s.preset.approval.timeoutMs).toISOString(),
       }
       // A transform hook: an extension may adjust risk/context/summary before the question reaches a
       // human, the same waterfall shape `context`/`before_request` already use. `argv` is cast rather

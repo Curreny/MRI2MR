@@ -8,10 +8,8 @@ surfaces: [daemon, sdk]
 # connected the alternative verdict is `unavailable`, which the kernel reads as a refusal, and a run
 # that is refused mid-way has done half the work and reported none of it.
 #
-# There is deliberately no `timeout_ms` here. An earlier draft wrote 0 meaning "never time out"; the
-# view reads it as a deadline of zero milliseconds and a timed-out approval is a rejection, so the
-# knob meant to wait forever refused everything instead. The host now refuses that document, and the
-# way to say "the default" is to leave the key out.
+# There is deliberately no `timeout_ms` here. It inherits the base value of 0, so a connected
+# human can answer without a deadline. An unavailable approver still parks the request.
 approval: { on_unavailable: park }
 # `required: true` is a hard requirement, not a preference: the host refuses to open a session when
 # the platform cannot provide L1. An unattended run has no operator to notice that the isolation it

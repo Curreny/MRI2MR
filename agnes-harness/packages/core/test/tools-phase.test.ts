@@ -59,6 +59,67 @@ const withTool = (t: unknown) => {
 }
 
 describe('tools phase', () => {
+  it('waits for a human choice past the ordinary tool deadline and records it in this turn', async () => {
+    const input = {
+      question: 'DICOM 是否已脱敏？',
+      options: [
+        { id: 'yes', label: '已脱敏，继续' },
+        { id: 'stop', label: '停止' },
+      ],
+    }
+    let answer!: (value: { verdict: 'allowed-once'; selectionId: string }) => void
+    let asked = false
+    const tool: ToolDef = {
+      name: 'request_user_input',
+      description: 'ask human',
+      parameters: Type.Object({}),
+      meta: {
+        isReadOnly: true,
+        isDestructive: false,
+        isConcurrencySafe: false,
+        isOpenWorld: false,
+        replay: 'never',
+        costHint: {},
+        deferLoading: false,
+        requiresApproval: 'never',
+      },
+      execute: async (_args, ctx) => ({
+        content: [{ type: 'text', text: JSON.stringify(await ctx.requestUserInput?.(input)) }],
+      }),
+    }
+    const s = await atTools(
+      [toolTurn('request_user_input', {})],
+      withTool(tool),
+      fakeSeams({
+        approval: {
+          ask: async (req) => {
+            expect(req).toMatchObject({ kind: 'input', input, deadline: '' })
+            asked = true
+            return new Promise((resolve) => {
+              answer = resolve
+            })
+          },
+          resume: async () => null,
+        },
+      }),
+    )
+    s.session.preset = { ...s.session.preset, tools: { ...s.session.preset.tools, timeoutMs: 5 } }
+    let finished = false
+    const pending = s.session.runToolsPhase().then((result) => {
+      finished = true
+      return result
+    })
+    await vi.waitFor(() => expect(asked).toBe(true))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(finished).toBe(false)
+    answer({ verdict: 'allowed-once', selectionId: 'yes' })
+    await pending
+    expect((await s.log.scan({ type: 'tool/result', limit: 5 }))[0]?.data).toMatchObject({
+      isError: false,
+      content: [{ text: JSON.stringify({ status: 'selected', optionId: 'yes', label: '已脱敏，继续' }) }],
+    })
+  })
+
   it('holds one workspace invocation around context creation and every real tool capability', async () => {
     const events: string[] = []
     let finishHeldRead!: () => void
@@ -376,7 +437,7 @@ describe('tools phase', () => {
       answer: { verdict: 'rejected', reason: 'timeout' },
       decided: { verdict: 'rejected', reason: 'timeout' },
       code: 'APPROVAL_REJECTED',
-      text: /^no one answered the approval within 60s, so the action was not run; ask the user before trying again$/,
+      text: /^the approval request ended without an answer, so the action was not run; ask the user before trying again$/,
     },
     {
       answer: 'unavailable',

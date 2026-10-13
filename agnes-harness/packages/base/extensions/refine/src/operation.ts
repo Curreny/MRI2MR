@@ -87,7 +87,10 @@ async function askForGlobal(ctx: OpContext, proposal: RefineProposal): Promise<b
     summary: proposal.rationale,
     risk: 'always' as const,
     bindingHash: '',
-    deadline: new Date(ctx.session.d.clock() + ctx.preset.approval.timeoutMs).toISOString(),
+    deadline:
+      ctx.preset.approval.timeoutMs === 0
+        ? ''
+        : new Date(ctx.session.d.clock() + ctx.preset.approval.timeoutMs).toISOString(),
   }
   const overridden = ctx.session.hooks.approvalRequest
     ? (

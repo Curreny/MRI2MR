@@ -116,6 +116,23 @@ For the request to open a picker, Agnes should call `choose_dicom_folder` and wa
 
 ## Capabilities and parameters
 
+### Conversation previews
+
+The Agnes chat (port 4177) keeps visualization cards visible even when the execution trace is collapsed. `inspect_dicom_case` returns a bounded sample of original grayscale DICOM pixels (up to 2048 scanned files and three series, with no patient metadata overlays). Successful conversion polling and reused conversions return NIfTI middle slices in three canonical directions, respecting voxel spacing and using only the first frame for 4D volumes. Up to three converted volumes are shown per result, stacked in one composite image with numbered volume labels; all output paths remain in the tool details. The MCP production limit is two image blocks per result. NIfTI replies use one image and dual-vessel replies use at most two, each within the byte and pixel budgets. If a previous poll failed with `image count exceeds media limit`, poll that completed job again after reconnecting the updated MCP; do not rerun conversion.
+
+Every `evaluate_vessel_candidate` shows the requested vessel's six-view GLB montage, case/candidate IDs, effective parameters, file size, vertices and faces. `suggest_vessel_parameters` shows that candidate's images, the Agent's assessments, its reason and the proposed parameter changes. `finalize_vessel_case` repeats the selected model preview. This implementation uses six-view images rather than an interactive GLB viewer. Each candidate remains a separate card so iterations can be compared without overwriting earlier results.
+
+The MCP reply includes a version-1 `visualization` object and standard image content blocks. The Web client reads complete recorded tool details rather than parsing the clipped timeline preview, verifies each image descriptor against an artifact link in that same result, then uses the existing authenticated session artifact reader. No arbitrary local-file HTTP endpoint is added. Preview errors leave processing results intact; unavailable/compressed DICOM pixels produce a visible note, and failed image reads retain the candidate's parameters and metrics. Object URLs are released on unmount and session changes. Pre-update chat records do not contain this metadata; evaluate an existing candidate again to create a preview card without rebuilding it.
+
+After updating source, rebuild `dist/local`, restart the Web service and its daemon, then reload the browser. The Python MCP process must also be restarted to load the new reply enrichment. Existing candidates and output files can be reused.
+
+Synthetic preview checks (no patient data or long reconstruction jobs):
+
+```powershell
+& "..\venv\runtime\python\BrainAAL\python.exe" -B -m unittest integrations\vessel-pilot\test_vessel_pilot.py integrations\vessel-pilot\test_visualization.py -q
+corepack pnpm exec vitest run packages/web/test/vessel-tool-preview.test.tsx packages/web/test/conversation-message-adapter.test.ts --maxWorkers=1
+```
+
 This remains the same `vessel-pilot` MCP server with eleven tools. Intent routing belongs to `skill/SKILL.md`; the MCP schema, service validation and job runner enforce the selected scope. No second MCP or independent medical algorithm is introduced. The implementation still runs `scripts/Vascular_cmd.py`.
 
 | Tool | Capability and configurable inputs |
@@ -174,6 +191,14 @@ Input inspection is deliberately lightweight: it recognizes non-empty `.dcm`, `.
 | Retrying after a failed conversion | Remove the prior generated MRA/MRV and selection summary before the new command, preventing stale halves from being combined. |
 
 Candidate generation requires `conversion_status=succeeded` plus the requested inputs: MRA for artery, MRV for vein, both for a combined candidate. A vein-only candidate uses MRV as its reference space and does not require MRA or T1. New conversions persist each validated output's size and SHA-256, and candidate generation rejects later changes to those files. A failed or partial conversion cannot advance merely because files with the expected names remain on disk. Candidates run sequentially within one case; independent cases may run concurrently. In batch mode, stop only the affected case and continue other independent cases.
+
+## Human confirmation in WebUI
+
+VesselPilot's skill calls Harness `request_user_input` for missing deidentification confirmation, ambiguous sequence choices and human review. The WebUI shows a card above the chat composer with the question, context and options; the choice returns as a tool result to the same running turn. No extra chat message is needed, and `request_user_input` has no default deadline. Cancellation, an unavailable approver or an invalid choice never authorizes reconstruction.
+
+Native action approvals now also wait without a deadline by default (`approval.timeout_ms: 0`). Positive values keep timed rejection behavior. `tools.timeouts.request_user_input: 0` keeps human input separate from ordinary tool execution limits. These waits do not consume MCP's 60-second call timeout. Rebuild the canonical local CLI/Web bundle and reinstall the skill into the configured Agnes home after updating. Existing sessions may keep their saved preset; check the effective preset when resuming an older session.
+
+Keep the browser and backend connected while deciding. Closing the page, switching sessions, stopping the task or losing the connection cancels/refuses a live request; this change does not add durable approval recovery across disconnects or daemon restarts. The recorded task and existing reconstruction outputs remain available.
 
 ## Long-running jobs
 

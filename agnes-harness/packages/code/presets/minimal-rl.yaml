@@ -34,7 +34,7 @@ budget: { preflight: estimate, per_request_cap: null, on_exceed: quote, max_step
 # approval seam. command_policy: validated by the host when a session opens and evaluated by base's
 # approval seam. Empty means nothing is pre-approved: every destructive call reaches a human, and
 # with nobody connected `deny` refuses it. That is the baseline's whole approval posture.
-approval: { on_unavailable: deny, timeout_ms: 60000, command_policy: [] }
+approval: { on_unavailable: deny, timeout_ms: 0, command_policy: [] }
 # required: read by the host, which refuses to open a session when the platform cannot provide L1.
 # on_unavailable: read by core's readPreset. level: NOT CONSUMED.
 sandbox: { level: L1, required: false, on_unavailable: deny }

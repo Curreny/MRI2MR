@@ -63,6 +63,7 @@ export class PrompterRouter implements Prompter {
     // where nothing was asked. Every path below has put the question on the wire.
     const target = candidates[0]
     if (!target) return this.done(req.requestId, 'absent', 'unavailable')
+    const input = req.kind === 'input' ? req.input : undefined
     const params = {
       sessionId: req.sessionKey,
       toolCall: {
@@ -72,12 +73,31 @@ export class PrompterRouter implements Prompter {
         kind: req.kind === 'tool' ? toolKind(req.tool?.name) : 'other',
         status: 'pending',
         // The tool's name, so a client can say what "allow for the session" covers.
-        ...(req.tool ? { _meta: { 'ai.agnes.harness': { tool: req.tool.name } } } : {}),
+        ...(input
+          ? {
+              _meta: {
+                'ai.agnes.harness': { input: true, context: input.context ?? '', options: input.options },
+              },
+            }
+          : req.tool
+            ? { _meta: { 'ai.agnes.harness': { tool: req.tool.name } } }
+            : {}),
       },
       // This request is ACP. Its allow_always is session-scoped and must never be upgraded into
       // Agnes' distinct profile-scoped permanent verdict.
-      options: OFFERED_OPTION_KINDS.map((k) => ({ optionId: k, name: k, kind: k })),
-      _meta: { 'ai.agnes.harness': { deadline: req.deadline, requestId: req.requestId } },
+      options: input
+        ? [
+            ...input.options.map((option) => ({
+              optionId: `input:${option.id}`,
+              name: option.label,
+              kind: 'allow_once' as const,
+            })),
+            { optionId: 'input-cancel', name: 'Cancel', kind: 'reject_once' as const },
+          ]
+        : OFFERED_OPTION_KINDS.map((k) => ({ optionId: k, name: k, kind: k })),
+      _meta: {
+        'ai.agnes.harness': { ...(req.deadline ? { deadline: req.deadline } : {}), requestId: req.requestId },
+      },
     }
     const deadlineMs = Date.parse(req.deadline) - this.o.clock()
     let res: unknown
@@ -102,6 +122,14 @@ export class PrompterRouter implements Prompter {
     }
     const outcome = (res as { outcome?: { outcome?: unknown; optionId?: unknown } } | undefined)?.outcome
     if (outcome?.outcome === 'cancelled') return this.done(req.requestId, 'answered', 'cancelled')
+    if (input) {
+      if (outcome?.outcome === 'selected' && outcome.optionId === 'input-cancel')
+        return this.done(req.requestId, 'answered', 'cancelled')
+      const selected = input.options.find((option) => outcome?.optionId === `input:${option.id}`)
+      return outcome?.outcome === 'selected' && selected
+        ? this.done(req.requestId, 'answered', { verdict: 'allowed-once', selectionId: selected.id })
+        : this.done(req.requestId, 'malformed', 'rejected')
+    }
     if (
       outcome?.outcome === 'selected' &&
       typeof outcome.optionId === 'string' &&
