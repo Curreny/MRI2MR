@@ -8,6 +8,10 @@ import type { ArtifactReadScopeAuthority } from '../local/methods/artifacts.js'
 
 const MAX_ROOTS_PER_HEADER = 256
 const ARTIFACT_URI = /^artifact:\/\/([0-9a-f]{64})$/u
+// MCP tools are registered under the Host-owned `mcp_<slug>_<hash8>_<remote>` namespace.
+// Keep this aligned with base/src/mcp/naming.ts and the 64-character ToolCall name limit; merely
+// starting with `mcp_` is not enough to cross the artifact-read trust boundary.
+const MCP_TOOL_RESULT_ORIGIN = /^tool:mcp_[a-z0-9_]{1,40}_[0-9a-f]{8}_[A-Za-z0-9_]+$/u
 
 export type TrustedArtifactOwnership = Readonly<{
   resolve(sessionId: string, signal: AbortSignal): Promise<unknown>
@@ -127,7 +131,10 @@ function mediaRoots(event: EventEnvelope): readonly Readonly<{ sha256: string; m
   const data = event.data as { content?: unknown; isError?: unknown }
   const imageResult =
     (['tool:computer_use', 'tool:document_read'].includes(event.origin) && event.trust === 'untrusted') ||
-    (event.origin === 'tool:read' && event.trust === 'trusted')
+    (event.origin === 'tool:read' && event.trust === 'trusted') ||
+    (event.origin.length <= 'tool:'.length + 64 &&
+      MCP_TOOL_RESULT_ORIGIN.test(event.origin) &&
+      event.trust === 'untrusted')
   if (!imageResult || data.isError !== false) return undefined
   if (!Array.isArray(data.content)) return undefined
   const roots = new Map<string, Readonly<{ sha256: string; mime: string }>>()

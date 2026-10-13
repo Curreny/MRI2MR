@@ -1,7 +1,12 @@
 /** @vitest-environment happy-dom */
 import { describe, expect, it, vi } from 'vitest'
 import { setLocaleTranslator } from '../src/locale-bridge.js'
-import { requestWorkspacePicker, workspacePickerAvailable } from '../src/workspace-picker.js'
+import {
+  multiFolderPickerAvailable,
+  requestMultiFolderPicker,
+  requestWorkspacePicker,
+  workspacePickerAvailable,
+} from '../src/workspace-picker.js'
 import { zhT } from './helpers/locale.js'
 
 // i18n: these suites assert zh-CN catalog output; pin the translator before imports run.
@@ -62,6 +67,42 @@ describe('workspace picker client', () => {
           async () =>
             new Response(JSON.stringify({ error: { code: 'UNAUTHORIZED', detail: 'secret' } }), {
               status: 401,
+            }),
+        ),
+      ),
+    ).rejects.toThrow('无法确认')
+  })
+})
+
+describe('multi-folder picker client', () => {
+  it('checks capability and decodes a bounded unique path list', async () => {
+    const capability = vi.fn<typeof fetch>(
+      async () => new Response(JSON.stringify({ available: true }), { status: 200 }),
+    )
+    await expect(multiFolderPickerAvailable(capability)).resolves.toBe(true)
+    expect(capability).toHaveBeenCalledWith(
+      '/api/folder-picker',
+      expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+    )
+    await expect(
+      requestMultiFolderPicker(
+        vi.fn<typeof fetch>(
+          async () =>
+            new Response(JSON.stringify({ status: 'selected', paths: ['C:\\a', 'D:\\b', 'C:\\a'] }), {
+              status: 200,
+            }),
+        ),
+      ),
+    ).resolves.toEqual({ status: 'selected', paths: ['C:\\a', 'D:\\b'] })
+  })
+
+  it('fails closed when any selected path is malformed', async () => {
+    await expect(
+      requestMultiFolderPicker(
+        vi.fn<typeof fetch>(
+          async () =>
+            new Response(JSON.stringify({ status: 'selected', paths: ['C:\\ok', ''] }), {
+              status: 200,
             }),
         ),
       ),

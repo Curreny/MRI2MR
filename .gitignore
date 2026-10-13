@@ -1,6 +1,6 @@
 # Separate project; never include it in the MRI2MR repository.
 # agnes-harness/
-runtime/
+venv/
 mri_reface/
 
 # Generated patient-study workspace data.

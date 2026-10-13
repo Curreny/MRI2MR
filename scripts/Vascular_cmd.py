@@ -316,18 +316,26 @@ class DicomConverter:
         for candidate in candidates:
             matched = self._matched_keywords(candidate["desc"], keywords)
             derived = self._matched_derived_keywords(candidate["desc"])
-            eligible = bool(matched) and not candidate["has_bval_bvec"]
+            shape = candidate.get("shape", [])
+            valid_3d = len(shape) == 3 and all(int(value) > 1 for value in shape)
+            eligible = False
             score: float | None = None
             if candidate["has_bval_bvec"]:
                 reason = "excluded: diffusion sidecars present"
             elif not matched:
                 reason = "excluded: no modality keyword match"
+            elif candidate.get("nifti_load_error"):
+                reason = "excluded: converted NIfTI is unreadable"
+            elif not valid_3d:
+                reason = "excluded: reconstruction requires a non-degenerate 3D volume"
+            elif derived:
+                reason = f"excluded: derived/localizer series ({', '.join(derived)})"
             else:
+                eligible = True
                 score = float(100 * len(matched))
                 score += 40 if candidate["is_original_image_type"] else 0
-                score += 20 if len(candidate["shape"]) == 3 else 0
+                score += 20
                 score -= 60 if candidate["is_derived_image_type"] else 0
-                score -= 90 + 20 * len(derived) if derived else 0
                 score += min(candidate["size"] / 1_000_000.0, 50.0) / 100.0
                 reason = "eligible: keyword match"
             evaluated.append(
@@ -347,11 +355,21 @@ class DicomConverter:
             default=None,
         )
         selected = selected_item["candidate"] if selected_item else None
+        warnings: list[str] = []
+        if len(eligible_items) > 1:
+            warnings.append("multiple_matching_candidates_ranked_deterministically")
+        if len(eligible_items) < len(candidates):
+            warnings.append("nonmatching_or_unsupported_series_ignored")
+        if selected and selected.get("is_derived_image_type"):
+            warnings.append("selected_series_has_derived_image_type")
         report = {
             "modality": modality,
             "reason": selected_item["reason"] if selected_item else "no matching candidate",
             "matched_keywords": selected_item["matched"] if selected_item else [],
             "candidate_count": len(candidates),
+            "eligible_candidate_count": len(eligible_items),
+            "ignored_candidate_count": len(candidates) - len(eligible_items),
+            "warnings": warnings,
             "selected_candidate": (
                 self._candidate_summary(
                     selected,

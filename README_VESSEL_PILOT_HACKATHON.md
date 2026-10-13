@@ -16,6 +16,7 @@ VesselPilot 是一套全新的独立血管处理工具。它参考 MRI2MR 中已
 ### 包含
 
 - DICOM 序列转换为 NIfTI（NII）。
+- 对话框支持直接输入路径或一次选择多个项目外 DICOM 目录，并按独立病例批处理。
 - MRA 动脉和 MRV 静脉三维重建。
 - 仅对三项公开参数进行自动调优。
 - 候选模型的文件大小、网格有效性、连通性与标准化视觉预览。
@@ -26,22 +27,22 @@ VesselPilot 是一套全新的独立血管处理工具。它参考 MRI2MR 中已
 
 - MRI2MR 工程、其 Web UI 和其他功能模块。
 - DTI 纤维、脑叶、灰白质、脑室、ROI 等非血管模型。
-- 头皮静脉筛除或头皮静脉质量评分。
+- 基于颅骨的精确头皮静脉分割或临床级头皮静脉判定；MVP 仅提供动脉空间包络代理指标，用于同病例候选间调参比较。
 - 患者原始数据、密钥、医院专用配置和未授权第三方资产。
 - 临床诊断、治疗建议或医疗器械功能声明。
 
-> 输入为已去颅骨、脱敏的数据，头皮静脉不属于重建目标，也不作为候选优劣指标。
+> 当前输入只对面部信息做模糊脱敏，并未去除颅骨。头皮/外周静脉不属于最终重建目标，其相对占比纳入候选调参，但现阶段只能使用动脉空间包络代理；该指标不是颅骨分割或临床解剖结论。
 
 ## 3. 核心目标与验收标准
 
 ### 核心目标
 
-从一例脱敏 DICOM 数据自动得到 MRA/MRV NIfTI，生成适用于 MR 展示的动脉和静脉 GLB。系统根据候选结果自动调整参数，输出质量最佳的一版模型及其完整可追溯证据。
+从一例或多例脱敏 DICOM 数据分别得到 MRA/MRV NIfTI，生成适用于 MR 展示的动脉和静脉 GLB。系统根据各病例候选结果自动调整参数，输出质量最佳的一版模型及其完整可追溯证据。
 
 ### 硬性验收标准
 
-- [ ] DICOM 转换成功，目标 MRA/MRV NIfTI 可读取。
-- [ ] 动脉和静脉 GLB 成功生成，文件非空且可读取。
+- [x] DICOM 转换成功，目标 MRA/MRV NIfTI 可读取。
+- [x] 动脉和静脉 GLB 成功生成，文件非空且可读取。
 - [ ] GLB 文件大小不超过 MR 展示端上限。
 - [ ] 模型没有明显主干血管断裂；无法可靠判断时标记为“需人工复核”。
 - [ ] 最终模型、候选参数、评估报告和 AGH 调用轨迹可一一对应。
@@ -97,15 +98,16 @@ Agnes：读取报告和预览，按经验规则选择下一轮参数
 
 | 工具 | 输入 | 输出 | 作用 |
 | --- | --- | --- | --- |
-| choose_dicom_folder | 无 | 用户选择的受控 DICOM 目录或取消状态 | 在会话触发本机文件夹选择对话框 |
-| inspect_dicom_case | DICOM 目录、脱敏确认 | `case_id`、输入指纹、预检摘要 | 在受控输入根目录登记病例 |
+| 输入框“选择 DICOM 文件夹”按钮 | 用户交互 | 每次选择 1 个绝对目录并写入可编辑草稿，可重复点击追加 | Windows 原生目录选择；不上传、不复制数据 |
+| choose_dicom_folder | 无 | 用户选择的 DICOM 目录或取消状态 | 通过文字命令在会话触发单目录选择器 |
+| inspect_dicom_case | DICOM 目录、脱敏确认 | `case_id`、输入指纹、预检摘要 | 登记用户显式选择/输入的目录；启用 `--allow-any-input` 时可位于工作区外 |
 | get_vessel_case | `case_id` | 转换状态、候选列表 | 查询病例当前状态 |
 | start_dicom_conversion | `case_id` | 异步 `job_id` | 启动 DICOM → MRA/MRV NIfTI |
 | start_vessel_candidate | `case_id`、候选 ID、三项白名单参数 | 异步 `job_id` | 生成一组不可变动脉/静脉候选 |
 | get_vessel_job | `case_id`、`job_id`、等待秒数 | 阶段、权威耗时、终态产物或精简未变化状态 | 服务端长轮询最多 55 秒，阻止快速空转 |
 | cancel_vessel_job | `case_id`、`job_id` | `cancelled` 终态 | 取消任务和子进程树 |
 | list_vessel_candidates | `case_id` | 参数、产物和报告摘要 | 比较已生成候选 |
-| evaluate_vessel_candidate | `case_id`、候选 ID | `report.json`、十二张预览 PNG、两张六视角拼图 | 技术网格质控并把可视预览送入会话 |
+| evaluate_vessel_candidate | `case_id`、候选 ID | `report.json`、十二张预览 PNG、两张六视角拼图、静脉空间代理占比 | 技术网格质控并把可视预览送入会话 |
 | suggest_vessel_parameters | 病例、基准候选、动/静脉视觉判断 | 一个未尝试的单参数调整建议 | 把 AI 的过密/过疏判断转换为受约束调参 |
 | finalize_vessel_case | 通过技术质控的候选 ID | final/ 双 GLB、报告、参数、manifest | 固化最终交付物 |
 
@@ -115,11 +117,12 @@ Agnes：读取报告和预览，按经验规则选择下一轮参数
 
 ### 量化指标
 
-- [ ] 转换、重建、渲染和导出均成功。
-- [ ] GLB 非空、可读取，顶点数和面数有效。
+- [x] 转换、重建、渲染和导出均成功。
+- [x] GLB 非空、可读取，顶点数和面数有效。
 - [ ] 文件大小、顶点数、三角面数不超过展示端上限。
 - [ ] 最大连通域占比、有效连通域数及骨架端点/短支路异常指标在可接受范围。
 - [ ] 包围盒尺寸和网格密度适合 MR 展示。
+- [x] 报告颅内与头皮/外周静脉代理表面积占比，并仅在同一病例候选之间比较变化。
 
 ### 标准化视觉预览
 
@@ -140,6 +143,8 @@ Agnes：读取报告和预览，按经验规则选择下一轮参数
 | 动脉主要分支缺失或明显断裂 | 降低 vessel_threshold |
 | 静脉模型过密、噪声多或文件过大 | 提高 mrv_weak_grow_tolerance，或提高 mrv_post_process_min_size |
 | 静脉主要分支缺失或明显断裂 | 降低 mrv_weak_grow_tolerance，或降低 mrv_post_process_min_size |
+| 头皮/外周静脉代理占比升高且拼图显示其明显占优 | 标记 `scalp_dominant`，先提高 mrv_weak_grow_tolerance，必要时提高 mrv_post_process_min_size |
+| 头皮/外周代理下降但颅内主要分支同时缺失 | 标记 `intracranial_sparse`，向相反方向单参数回退 |
 | 指标和视觉结论冲突 | 保留候选并标记“需人工复核”，不得自动发布 |
 
 > 规则给出调整方向，Agnes 只在允许的离散候选中选择下一轮组合，保证过程可复现、可审计。
@@ -154,11 +159,11 @@ Agnes：读取报告和预览，按经验规则选择下一轮参数
 - [x] 随项目运行时为 `runtime/python/BrainAAL/python.exe`（Python 3.9.21），已验证可导入当前脚本所需的 `nibabel`、`numpy`、`scipy`、`skimage`、`trimesh` 和 `vedo`。
 - [x] dcm2niix 与 DCMTK 已随项目提供；正式接入时使用项目内绝对路径，不依赖操作者机器的全局 `PATH` 或外部 Conda 环境。
 - [x] 当前 CLI 成功退出码为 `0`、失败为 `1`；默认动脉阈值是 `400`，而智能体基线要求显式传入 `800`。
-- [ ] 修复/规避 Windows 下 CLI 帮助和日志中文乱码，保证 MCP 能稳定保存 UTF-8 日志并提取错误信息。
+- [x] 修复/规避 Windows 下 CLI 帮助和日志中文乱码，保证 MCP 能稳定保存 UTF-8 日志并提取错误信息。
 
 ### 8.2 阶段 0：冻结需求、数据合同和验收门槛
 
-- [x] 明确用户输入入口：用户可直接在会话输入绝对目录，或让 `choose_dicom_folder` 打开本机文件夹对话框；目录必须位于已配置输入根内，且仍需单独确认已脱敏。ZIP 上传暂不支持。
+- [x] 明确用户输入入口：用户可直接输入一个或多个绝对目录、让 `choose_dicom_folder` 打开单目录选择器，或重复点击输入框旁的 DICOM 文件夹按钮，每次追加 1 个目录。目录可位于工作区外，但必须由用户显式提供并确认已脱敏；ZIP 上传暂不支持。
 - [x] MVP 要求同时得到 MRA 与 MRV；转换未生成任一目标模态时作业失败，不能只产出一侧后声称成功。
 - [x] 明确输出合同：最终包含 `artery.glb`、`vein.glb`、`report.json`、`parameters.json`、十二张预览图和 `manifest.json`。
 - [ ] 确认单个 GLB 的文件大小、顶点数和三角面数上限，并写入版本化配置，禁止只写在 Skill 提示词中。
@@ -195,10 +200,11 @@ Agnes：读取报告和预览，按经验规则选择下一轮参数
 - [x] 实现 `finalize_vessel_case`：仅允许选择已成功评估的候选，复制到 `final/` 并生成 manifest、参数快照和校验和。
 - [x] 对转换和首次 MRV Frangi 等长任务采用 `start_*` + `get_vessel_job` + `cancel_vessel_job` 的异步作业语义。
 - [x] 为 11 个工具定义严格 JSON Schema：`additionalProperties: false`，并限制参数类型、枚举、ID 格式和字符串长度；只读查询与建议工具声明 `readOnlyHint=true`。
-- [x] 对 `case_id` 和 `candidate_id` 使用服务端映射；DICOM 输入经规范化后必须位于配置的 input root 内，ID 不能提供路径。
+- [x] 对 `case_id` 和 `candidate_id` 使用服务端映射；默认仍限制 input root，本地部署显式启用 `--allow-any-input`，仅允许处理用户选择/输入的规范化绝对目录；ID 不能提供路径，输出始终限制在 `case_root`。
 - [x] 使用参数数组启动子进程，捕获 stdout/stderr，固定工作目录和 UTF-8；任何用户文本都不拼接成 shell 命令。
 - [ ] 限制并发任务数、单病例磁盘配额和日志大小；实现重复请求幂等、服务重启后的状态恢复和孤儿进程清理。
 - [x] MCP 返回产物引用和摘要，不把 DICOM/NIfTI 二进制或超大 GLB 直接塞进模型上下文。
+- [x] 多病例交互保持每个输入目录独立的 `case_id/job_id/candidate_id`，Skill 将长任务并发限制为 2，并按病例汇总状态与最终结果。
 
 **阶段完成标准：** MCP inspector 能列出预期工具；合法调用可产生真实文件，越权路径、第四个调参项、越界参数、重复候选和取消场景均被服务端可靠处理。
 
@@ -208,6 +214,8 @@ Agnes：读取报告和预览，按经验规则选择下一轮参数
 - [ ] 从分割结果计算连通域数、最大连通域占比、体素/体积变化；从骨架计算端点、分叉点、短支路等断裂风险指标。
 - [x] 动脉与静脉分别生成前、后、左、右、上、下固定正交视角 PNG，固定尺度、配色和背景，并按候选目录隔离。
 - [x] 将每侧六视角合成为一张拼图，并由 `evaluate_vessel_candidate` 以 MCP image content 返回会话，使 Agnes 可直接执行明显过密/过疏复核。
+- [x] Agnes daemon 为成功的注册 MCP 图片结果建立会话级制品读取授权，并验证工具命名空间、信任级别、CAS 实体、MIME、会话、lane 与 owner；修复“PNG 已写入 CAS，但下一模型步骤报 `artifact ... could not be read`”的问题。
+- [x] 增加 `expanded_artery_aabb_v1` 静脉空间代理：用动脉包围盒向各轴扩张 15%，计算静脉三角面在包络内外的表面积占比，供同病例候选比较；报告明确其不是颅骨分割或临床标签。
 - [ ] 定义并版本化 `report.json` Schema，包含输入指纹、工具版本、参数、指标、阈值版本、问题标签、硬性失败原因、评分、结论和产物校验和。
 - [ ] 将“硬门槛”和“软评分”分离：损坏/超限/缺失任何一侧直接失败；软指标只对通过硬门槛的候选排序。
 - [ ] 对量化指标与视觉判断冲突、视觉低置信度或不在校准分布内的情况输出 `review`，不得自动发布。
@@ -225,6 +233,7 @@ Agnes：读取报告和预览，按经验规则选择下一轮参数
 - [x] 定义长任务交互：候选重建启动后提示用户通常约需 20 分钟；`get_vessel_job` 在服务端长轮询 55 秒，普通运行状态每 2–4 分钟汇报一次，终态和阶段变化立即汇报。
 - [x] 作业状态返回 `phase`、`server_time`、`elapsed_seconds` 和 `elapsed_minutes`；Skill 禁止 Agnes 自行用时间戳、CPU 时间或轮询次数推算耗时。
 - [x] 实现 `suggest_vessel_parameters`：Agnes 阅读动静脉拼图后分别标记 `good/too_dense/too_sparse/uncertain`，服务端只返回未尝试且一次改变一个参数的候选建议。
+- [x] 静脉调参增加 `scalp_dominant/intracranial_sparse` 判断，要求同时参考拼图与同病例代理占比变化，优先保留颅内分支而不是单纯压低头皮比例。
 - [ ] 最佳候选选择由服务端根据版本化报告和评分执行或复核，Agnes 负责提出候选与解释，不能凭文字声称某个未评估模型最佳。
 - [x] 最终回复必须列出病例状态、动脉/静脉 GLB 产物、最佳参数、关键指标、迭代次数、是否需人工复核和报告位置；失败时列出安全错误原因与下一步。
 - [ ] 准备 Skill 正向/反向行为用例：正常生成、分支缺失降阈值、模型过密升阈值、无改善停止、工具失败停止、越界参数拒绝、报告冲突转人工复核。
@@ -236,10 +245,14 @@ Agnes：读取报告和预览，按经验规则选择下一轮参数
 - [x] 为 VesselPilot MCP 准备可移植启动入口和注册命令，使用 `runtime/python/BrainAAL/python.exe`，默认病例根为 `workspace/vessel-pilot`。
 - [x] 已将更新后的 11 工具目录重新加载到本机 AGH local-dev，确认 `connection=ready`，文件夹选择与调参建议工具在目录中可见。
 - [x] 已刷新测试会话实际使用的 `MRI2MR-core` 工作区 Skill；本机状态为 `trust=trusted`、`desired=enabled`、`actual=ready`、`winner`。
+- [x] Agnes Web 输入框按钮与 Skill 的 `choose_dicom_folder` 都会打开置于浏览器前方的 Windows 原生单目录选择器。输入框按钮可重复点击追加多个绝对目录并形成可编辑批处理提示，不调用 `workspace.add`；两种入口都使用透明模态 owner，并通过 Win32 `SetWindowPos(HWND_TOPMOST)` 与 `SetForegroundWindow` 固定在原生顶层 Z-order，避免后台 Web/MCP 进程弹出的选择器被浏览器窗口遮挡。
+- [x] VesselPilot MCP 增加 `--allow-any-input` 部署开关，使项目外数据可读；路径仍须由用户显式选择/输入，病例产物仍写入受控 `workspace/vessel-pilot`。
 - [ ] 新会话中显式调用 `vessel-pilot` Skill，确认模型上下文已加载正确版本，并确认 MCP 工具目录与 Skill 中的工具名一致。
 - [ ] 从用户给出的 DICOM 入口跑一次完整流程，核对 AGH 轨迹中确有 `tools/call`、参数、返回状态和产物引用，而不是只有自然语言模拟。
 - [ ] 验证资源更新边界：修改 Skill 或 MCP 定义后重新审核 revision，并在新一轮/新会话确认生效，不把“文件已修改”当成“AGH 已加载”。
 - [ ] 验证断线、AGH 重启、MCP 重启、任务取消和重复提交后不会重复生成或丢失已完成候选。
+
+> 制品读取故障恢复：若旧 Agnes 会话已经在评估后报 `E_STEP_FAILED: artifact <sha256> could not be read`，该会话的历史中已保留未授权图片引用，后续步骤可能在推理前再次失败。升级并重启 Agnes 后应新建会话，对原 `case_id/candidate_id` 再调用一次 `evaluate_vessel_candidate`；评估会复用已成功生成的 GLB，不得因此重复运行候选重建。
 
 **阶段完成标准：** 用户在 AGH 提供一个受支持的 DICOM 入口后，系统可在同一病例任务中得到可下载/可定位的动脉和静脉 GLB，并能从最终产物反查完整工具轨迹。
 
@@ -248,6 +261,9 @@ Agnes：读取报告和预览，按经验规则选择下一轮参数
 - [ ] 正常样例：基线或有限调参后同时导出合格动脉/静脉 GLB，所有硬门槛通过。
 - [ ] 边界样例：构造或选择模型过大、过密、分支缺失场景，证明参数方向正确且报告指标改善。
 - [ ] 失败样例：缺少 MRV、损坏 DICOM、空分割、外部工具失败、超时、磁盘不足和全部候选不合格时安全退出，不留下“成功”假象。
+- [x] 输入预检失败矩阵：空目录、仅普通文件、零字节 DICOM-like 文件、符号链接、越界路径和登记后输入漂移均以稳定 `INPUT_*` 错误拒绝，不创建或推进假病例。
+- [x] DICOM 序列边界矩阵：允许混入无关文件并报告计数；排除 T1/扩散/无关、MIP/MPR/Scout/Localizer、损坏及非三维序列；多候选确定性排序并保留警告和选择证据。
+- [x] 转换完整性边界：仅 MRA、仅 MRV、两侧同源、损坏 NIfTI 均结构化失败；重试前清理旧转换产物，禁止把两次残留的单侧结果拼成成功，失败病例不能启动候选。
 - [ ] 安全样例：验证路径穿越、符号链接逃逸、额外 CLI 参数、越界数值、超长 ID、并发超配额和恶意 ZIP（若支持）均被拒绝。
 - [ ] 可复现性：同一输入指纹、参数和版本重复运行，产物指标在约定容差内一致；报告记录不能被后续候选覆盖。
 - [ ] 性能：记录转换、动脉、首次静脉、缓存静脉、评估各阶段耗时、峰值内存和磁盘占用，确认满足阶段 0 预算。
@@ -278,13 +294,15 @@ Agnes：读取报告和预览，按经验规则选择下一轮参数
 
 修复后的约束：
 
-- [x] 启动 Web、daemon 和执行 `mcp`/`skills` 管理命令前，显式使用同一个绝对 `AGH_HOME`；当前本机为 `agnes-harness/agh-home`。
+- [x] VesselPilot 开发与验收唯一允许的 Agnes home 是 `C:\Users\admin\Desktop\MRI2MR-core\agnes-harness\agh-home`。启动 Web、daemon，执行 `mcp`/`skills` 管理命令，以及刷新 Skill/MCP 前都必须先显式设置这个绝对 `AGH_HOME`；不得使用默认 `C:\Users\admin\.agh` 或另建临时 home。
+- [x] 正式本地入口固定为 `agnes-harness\packages\cli\dist\local\agnes.mjs`。功能源码变更后必须重新执行 `corepack pnpm --filter @agnes/cli build:local` 覆盖该入口，并保证 daemon 与 WebUI 使用同一入口；`local-vessel-pilot-*` 仅可作为构建验证目录，不能作为长期运行入口。
+- [x] 启动前核对 `$env:AGH_HOME`、`$env:AGNES_PROFILE` 和 4177 监听进程的命令行；若 WebUI 缺少新按钮，优先检查是否启动了未重建的 `dist\local`，而不是判断 Skill 未加载。
 - [x] 当前 MCP 在浏览器连接的实例中已刷新为 11 个工具，`connection=ready`；本机 Web 已切换到包含 MCP 图片限额的新构建，仍使用 4177 端口和原数据目录。
 - [x] Skill 已迁移到 `MRI2MR-core/.agh/skills/vessel-pilot/SKILL.md`，根工作区状态为 `actual=ready` 且为同名 winner。
 - [x] 已停止无会话的 `C:/Users/admin/.agh/data` 错误 daemon；未删除其数据。浏览器使用的 `agnes-harness/agh-home/data` daemon 保持运行。
 - [ ] 资源变更后在新一轮或新会话重新测试真实 DICOM 调用；旧的进行中轮次持有不可变资源快照，不以磁盘文件存在或另一实例显示 ready 作为成功依据。
 
-排错时按以下顺序检查：当前 Web 进程 → daemon 的 `data-dir`/origin → `AGH_HOME` → 会话 cwd → Skill workspace ID → MCP status/tools → 新一轮真实 `tools/call`。
+排错时按以下顺序检查：当前 Web 进程及其构建入口 → daemon 是否与 Web 使用同一构建 → daemon 的 `data-dir`/origin → 绝对 `AGH_HOME` → 会话 cwd → Skill workspace ID → MCP status/tools → 新一轮真实 `tools/call`。
 
 ### 8.11 长耗时任务的轮询与用户提示
 
@@ -313,7 +331,7 @@ Agnes：读取报告和预览，按经验规则选择下一轮参数
 - `suggest_vessel_parameters` 根据该判断从白名单中选择一个未运行组合，一次只改一个参数；它只建议，不自动启动长任务。
 - 自动搜索最多 6 个候选，已有技术通过且两侧视觉均为 `good`、连续两轮无明确改善、工具失败/取消或视觉不确定时停止。
 
-本轮验证：VesselPilot Python 测试 8/8 通过（含 DICOM 目录选择路径校验、MCP 两张图片返回、建议参数和取消长轮询）；Harness MCP 图片桥接测试 15/15 通过，`packages/base` 类型检查通过；本机 Web `HTTP 200`，MCP 11 工具 `ready`，根工作区 Skill `ready/winner`。原生对话框的人工点击和完整约 20 分钟真实重建仍需在 Agnes 新一轮会话中验收。
+本轮验证：VesselPilot Python 测试 16/16 通过（含空/非 DICOM-like/混合目录、输入漂移、并发转换、无关/派生/损坏序列、单侧模态、同源选择、损坏 NIfTI、MCP 错误结构、图片返回、建议参数和取消长轮询）；Harness MCP 图片桥接测试 15/15 通过，daemon 制品授权/读取回归测试 46/46 通过，`packages/base` 类型检查与 canonical `dist/local` 构建通过；本机 Web `HTTP 200`，MCP 11 工具 `ready`，根工作区 Skill `ready/winner`。旧故障会话不做原地恢复；原生对话框的人工点击和新会话复用现有候选完成拼图评估仍需在 Agnes 中验收。
 
 ## 9. 推荐目录结构
 
@@ -714,7 +732,7 @@ Write-Host "全部处理完成：$output"
 
 - [ ] 可运行的独立血管处理工具代码仓库。
 - [ ] AGH 插件、Skill 与配置模板。
-- [ ] DICOM 转 NIfTI、动脉重建、静脉重建、评估和预览源码。
+- [x] DICOM 转 NIfTI、动脉重建、静脉重建、评估和预览源码。
 - [ ] README：环境、安装、模型配置、运行命令、复现和限制说明。
 - [ ] 参数范围、经验规则及 report.json Schema。
 - [ ] 正常、边界、失败三类测试结果。

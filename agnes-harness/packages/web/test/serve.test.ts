@@ -507,6 +507,43 @@ it('reports workspace picker cancellation and unavailable hosts without exposing
   }
 })
 
+it('returns multiple absolute folders without changing the workspace picker contract', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agnes-web-folder-picker-'))
+  const port = await availablePort()
+  const server = await createWebServer({
+    root,
+    wsUrl: 'ws://127.0.0.1:4320',
+    port,
+    origin: `http://127.0.0.1:${port}`,
+    workspacePicker: {
+      available: async () => true,
+      pick: async () => ({ status: 'selected', path: 'C:\\workspace' }),
+      availableMany: async () => true,
+      pickMany: async () => ({
+        status: 'selected',
+        paths: ['C:\\dicom\\case-a', 'D:\\dicom\\case-b'],
+      }),
+    },
+  })
+  try {
+    const capability = await fetch(`${server.url}/api/folder-picker`)
+    await expect(capability.json()).resolves.toEqual({ available: true })
+    const selected = await fetch(`${server.url}/api/folder-picker`, {
+      method: 'POST',
+      headers: { Origin: server.url },
+    })
+    expect(selected.status).toBe(200)
+    await expect(selected.json()).resolves.toEqual({
+      status: 'selected',
+      paths: ['C:\\dicom\\case-a', 'D:\\dicom\\case-b'],
+    })
+    expect((await fetch(`${server.url}/api/folder-picker?multiple=true`)).status).toBe(403)
+  } finally {
+    await server.close()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 it('claims the workspace picker single-flight before awaiting capability', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agnes-web-picker-capability-race-'))
   const port = await availablePort()

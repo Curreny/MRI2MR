@@ -5,6 +5,11 @@ export type WorkspacePickerResult =
   | { status: 'cancelled' }
   | { status: 'unavailable' }
 
+export type MultiFolderPickerResult =
+  | { status: 'selected'; paths: string[] }
+  | { status: 'cancelled' }
+  | { status: 'unavailable' }
+
 type Fetcher = typeof fetch
 
 export async function workspacePickerAvailable(fetcher: Fetcher = fetch): Promise<boolean> {
@@ -20,6 +25,50 @@ export async function workspacePickerAvailable(fetcher: Fetcher = fetch): Promis
   } catch {
     return false
   }
+}
+
+export async function multiFolderPickerAvailable(fetcher: Fetcher = fetch): Promise<boolean> {
+  try {
+    const response = await fetcher('/api/folder-picker', {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'same-origin',
+    })
+    if (!response.ok) return false
+    const body = (await response.json()) as { available?: unknown }
+    return body.available === true
+  } catch {
+    return false
+  }
+}
+
+export async function requestMultiFolderPicker(fetcher: Fetcher = fetch): Promise<MultiFolderPickerResult> {
+  const response = await fetcher('/api/folder-picker', {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'same-origin',
+  })
+  let body: { status?: unknown; paths?: unknown }
+  try {
+    body = (await response.json()) as typeof body
+  } catch {
+    throw new Error(tr('settings.workspacePicker.ambiguous'))
+  }
+  if (body.status === 'cancelled') return { status: 'cancelled' }
+  if (body.status === 'unavailable') return { status: 'unavailable' }
+  if (
+    response.ok &&
+    body.status === 'selected' &&
+    Array.isArray(body.paths) &&
+    body.paths.length > 0 &&
+    body.paths.length <= 32 &&
+    body.paths.every(
+      (path): path is string =>
+        typeof path === 'string' && path.length > 0 && path.length <= 4096 && !path.includes('\0'),
+    )
+  )
+    return { status: 'selected', paths: [...new Set(body.paths)] }
+  throw new Error(tr('settings.workspacePicker.ambiguous'))
 }
 
 export async function requestWorkspacePicker(fetcher: Fetcher = fetch): Promise<WorkspacePickerResult> {

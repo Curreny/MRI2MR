@@ -1,3 +1,6 @@
+// 2026-10-13 VesselPilot DICOM folder interaction: reviewed exact countLines totals for Windows
+// multi-folder native selection, same-origin Web bridge, composer button and locale. Web 17008/app
+// 2237, Web-units 6227, CLI launch 1232, CLI-TUI 4740; no exclusions or spare allocation.
 // 2026-10-06 attachment history reopening: bound authority replay so worker frames can be split.
 // Reviewed exact countLines daemon 26847 (+5); no exclusions or spare allocation.
 // 2026-10-06 bundled document reader: default-helper migration and release payload preparation.
@@ -288,7 +291,7 @@ const INITIAL_CEILING: Record<string, number> = {
   // Fragment so the queue section can sit before the form, which costs the Fragment import, the
   // extracted `queueSection` binding and one extra nesting level. Measured: 5922, exact, no spare.
   // 2026-10-06: normalize JPEGs that fail strict validation and update the 10 MiB copy; 6090, exact.
-  'packages/web-units/src': 6192,
+  'packages/web-units/src': 6227,
   // Write staleness guard: a per-session table of what each file looked like when read, checked by
   // `write` (+55 counted lines, measured 855, exact cap).
   'packages/base/extensions/tools-core': 922,
@@ -456,7 +459,7 @@ const INITIAL_CEILING: Record<string, number> = {
   // which lands on top of the diagnostics wiring above. Re-measured with countLines(): 1827, exact.
   // 2026-10-04 image attachments: app.ts submits ContentBlock content while keeping the title locale.
   // Measured: 2148, exact, no spare.
-  'packages/web/src/app': 2183,
+  'packages/web/src/app': 2237,
   // 2026-09-22 UI plugin management: inject the embedded pane's client runtime reconciler.
   // 2026-09-25 UI refactor: permission options now render through the React region contract.
   // Re-measured with countLines(): 215, exact, no spare.
@@ -624,7 +627,7 @@ const INITIAL_CEILING: Record<string, number> = {
   // so the packaged worker resolves its home the same way the daemon does. Re-measured on the tree
   // rebased onto 9a3d70ed (which itself reached 936): 937, exact cap.
   // 2026-09-22 Web Plugins parity: package asset and service BFF launcher integration. Exact.
-  'packages/cli/launch': 1110, // SKILL-INSTALL-CORE: preserve request-only port in packaged Host options.
+  'packages/cli/launch': 1232, // VesselPilot multi-folder picker; exact measured count.
   // 2026-09-14: whole-branch review fix wave (Finding 1), same as above. Measured 90, exact --
   // unaffected by the workspace-picker change (different file, same aggregate prefix).
   // 2026-09-14: Task 4 profile-command-plan wires packages.trustWorkspace into invoke()'s switch --
@@ -1424,7 +1427,7 @@ const INITIAL_CEILING: Record<string, number> = {
   // WEB-INCREMENTAL-PROJECTION-TRACE-INDEX C3: projection.ts is now a re-export of the SDK engine.
   // measured 4238 (-534), exact, lowered to the measured value.
   // CHUNK-LEDGER-SLIM final tree: the TUI live line reads merged previews. Measured 4232, exact, no spare (-6).
-  'packages/cli-tui/src': 4737,
+  'packages/cli-tui/src': 4740,
   // Initial ceilings for the remaining packages, registered all at once so that each parallel lane
   // does not have to edit these two files separately. The sdk ceiling of 2500 was newly set by
   // estimate: 404 lines today, plus roughly 360 for the three transports, plus roughly 1650 for the
@@ -2148,7 +2151,7 @@ const INITIAL_CEILING: Record<string, number> = {
   // Approval reasons: the approval card label reads the decision reason (+22). Measured 16081 (combined tree), exact cap.
   // 2026-10-05 the merge keeps both sides' additions, so neither number holds. Re-measured on the
   // merged tree: 16861, exact, no spare.
-  'packages/web/src': 16908,
+  'packages/web/src': 17008,
   // 2026-09-17 web-client-modules frontend track (rebased onto L0/permission-picker main): re-measured exact value below.
   // 2026-09-14: Task 7 orphaned-pin-cleanup adds the orphan-pins section to PluginAdminPage — the
   // #orphanPins/#orphanPinsList/#orphanPinsStatus/#orphanPinsReleaseAll element bindings, the

@@ -151,6 +151,7 @@ export interface ComposerView {
   stopping: boolean
   usage: UsageView | undefined
   workspace: { disabled: boolean; label: string; title: string }
+  folder?: { disabled: boolean; pending: boolean }
 }
 
 export interface ComposerHandle {
@@ -180,6 +181,7 @@ export interface ComposerRegionOptions {
   onSendNow?(itemId: string): void
   onRemoveQueued?(itemId: string): void
   onWorkspace(): void
+  onFolders?(): void
 }
 
 export interface ComposerSlots {
@@ -346,6 +348,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     onSendNow,
     onRemoveQueued,
     onWorkspace,
+    onFolders,
     slots,
   }: ComposerProps,
   ref: ForwardedRef<ComposerHandle>,
@@ -1045,6 +1048,32 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
           },
         }),
         createElement('span', { id: 'composer-image-hint', className: 'visually-hidden' }, imageHint),
+        onFolders && view.folder
+          ? createElement(
+              'button',
+              {
+                id: 'composer-folders',
+                type: 'button',
+                className: 'secondary-button compact',
+                disabled: view.folder.disabled,
+                'aria-label': dependencies.translate('composer.folder.add'),
+                title: dependencies.translate('composer.folder.hint'),
+                onClick: onFolders,
+              },
+              createElement(
+                'svg',
+                { className: 'icon', viewBox: '0 0 24 24', 'aria-hidden': true },
+                createElement('path', { d: 'M3 6.5h7l2 2h9v10H3v-12zm0 0V5h7l2 2h9v1.5' }),
+              ),
+              createElement(
+                'span',
+                { className: 'visually-hidden' },
+                view.folder.pending
+                  ? dependencies.translate('composer.folder.opening')
+                  : dependencies.translate('composer.folder.add'),
+              ),
+            )
+          : undefined,
         createElement(
           'button',
           {

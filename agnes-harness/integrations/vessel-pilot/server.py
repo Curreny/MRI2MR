@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
-from service import Settings, VesselPilotService
+from service import Settings, VesselPilotInputError, VesselPilotService
 
 
 PROTOCOL_VERSION = "2025-03-26"
@@ -28,13 +28,13 @@ def object_schema(properties: dict[str, Any], required: list[str]) -> dict[str, 
 TOOLS = [
     {
         "name": "choose_dicom_folder",
-        "description": "Open a native Windows folder dialog so the user can select a deidentified DICOM directory under an allowed input root.",
+        "description": "Open a native Windows folder dialog so the user can select a deidentified DICOM directory. The selected directory may be outside the Agnes workspace when the server is configured with allow-any-input.",
         "inputSchema": object_schema({}, []),
         "annotations": {"readOnlyHint": True},
     },
     {
         "name": "inspect_dicom_case",
-        "description": "Register and preflight a user-confirmed deidentified DICOM directory.",
+        "description": "Register and preflight a user-confirmed deidentified directory, rejecting empty/non-DICOM-like input and reporting mixed-file warnings.",
         "inputSchema": object_schema(
             {
                 "input_path": {"type": "string", "minLength": 1, "maxLength": 1024},
@@ -122,7 +122,7 @@ TOOLS = [
     },
     {
         "name": "evaluate_vessel_candidate",
-        "description": "Validate both GLBs, compute technical mesh metrics, and return artery/vein six-view montage images for visual parameter assessment.",
+        "description": "Validate both GLBs, compute technical mesh metrics including an intracranial-versus-scalp/peripheral vein distribution proxy, and return artery/vein six-view montage images for visual parameter assessment.",
         "inputSchema": object_schema(
             {
                 "case_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
@@ -139,7 +139,17 @@ TOOLS = [
                 "case_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
                 "based_on_candidate_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
                 "artery_assessment": {"type": "string", "enum": ["good", "too_dense", "too_sparse", "uncertain"]},
-                "vein_assessment": {"type": "string", "enum": ["good", "too_dense", "too_sparse", "uncertain"]},
+                "vein_assessment": {
+                    "type": "string",
+                    "enum": [
+                        "good",
+                        "too_dense",
+                        "too_sparse",
+                        "scalp_dominant",
+                        "intracranial_sparse",
+                        "uncertain",
+                    ],
+                },
             },
             ["case_id", "based_on_candidate_id", "artery_assessment", "vein_assessment"],
         ),
@@ -218,12 +228,14 @@ class McpServer:
                 {"content": content, "structuredContent": data, "isError": False},
             )
         except (TypeError, ValueError, OSError, RuntimeError) as exc:
+            code = exc.code if isinstance(exc, VesselPilotInputError) else type(exc).__name__.upper()
+            details = exc.details if isinstance(exc, VesselPilotInputError) else {}
             self.reply(
                 request_id,
                 {
                     "content": [{"type": "text", "text": str(exc)}],
                     "structuredContent": {
-                        "error": {"code": type(exc).__name__.upper(), "message": str(exc)}
+                        "error": {"code": code, "message": str(exc), "details": details}
                     },
                     "isError": True,
                 },
@@ -284,8 +296,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="VesselPilot MCP stdio server")
     parser.add_argument("--case-root", type=Path)
     parser.add_argument("--input-root", action="append", type=Path, default=[])
+    parser.add_argument(
+        "--allow-any-input",
+        action="store_true",
+        help="Allow an explicitly supplied or selected local DICOM directory outside configured input roots.",
+    )
     args = parser.parse_args()
-    settings = Settings.discover(Path(__file__), args.case_root, args.input_root)
+    settings = Settings.discover(
+        Path(__file__), args.case_root, args.input_root, allow_any_input=args.allow_any_input
+    )
     McpServer(VesselPilotService(settings)).run()
     return 0
 

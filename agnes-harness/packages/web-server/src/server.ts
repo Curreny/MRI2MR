@@ -6,6 +6,7 @@ import { VENDOR_ENTRY_NAMES } from './vendor-assets.js'
 
 export const DEFAULT_WEB_PORT = 4177
 export const WORKSPACE_PICKER_PATH = '/api/workspace-picker'
+export const FOLDER_PICKER_PATH = '/api/folder-picker'
 const HOST = '127.0.0.1'
 const FILES = new Set([
   'index.html',
@@ -152,9 +153,16 @@ export type WorkspacePickerResult =
   | { status: 'cancelled' }
   | { status: 'unavailable' }
 
+export type WorkspacePickerManyResult =
+  | { status: 'selected'; paths: string[] }
+  | { status: 'cancelled' }
+  | { status: 'unavailable' }
+
 export type WorkspacePicker = {
   available(): Promise<boolean>
   pick(signal: AbortSignal): Promise<WorkspacePickerResult>
+  availableMany?(): Promise<boolean>
+  pickMany?(signal: AbortSignal): Promise<WorkspacePickerManyResult>
 }
 
 export type WebServer = {
@@ -395,11 +403,13 @@ export async function createWebServer(options: WebServerOptions): Promise<WebSer
         return
       }
       const requestUrl = new URL(request.url ?? '/', expectedOrigin)
-      if (requestUrl.pathname === WORKSPACE_PICKER_PATH) {
+      if (requestUrl.pathname === WORKSPACE_PICKER_PATH || requestUrl.pathname === FOLDER_PICKER_PATH) {
+        const multiple = requestUrl.pathname === FOLDER_PICKER_PATH
+        const expectedPath = multiple ? FOLDER_PICKER_PATH : WORKSPACE_PICKER_PATH
         const site = request.headers['sec-fetch-site']
         if (
           requestUrl.origin !== expectedOrigin.origin ||
-          request.url !== WORKSPACE_PICKER_PATH ||
+          request.url !== expectedPath ||
           requestUrl.search !== '' ||
           (site !== undefined && site !== 'same-origin' && site !== 'none') ||
           (request.headers.origin !== undefined && request.headers.origin !== expectedOrigin.origin)
@@ -412,7 +422,10 @@ export async function createWebServer(options: WebServerOptions): Promise<WebSer
           return
         }
         if (request.method === 'GET') {
-          const available = (await options.workspacePicker?.available().catch(() => false)) ?? false
+          const available =
+            (await (multiple
+              ? options.workspacePicker?.availableMany?.().catch(() => false)
+              : options.workspacePicker?.available().catch(() => false))) ?? false
           json(response, 200, { available })
           return
         }
@@ -438,23 +451,38 @@ export async function createWebServer(options: WebServerOptions): Promise<WebSer
         request.once('aborted', abort)
         response.once('close', abort)
         try {
-          const available = (await options.workspacePicker?.available().catch(() => false)) ?? false
+          const available =
+            (await (multiple
+              ? options.workspacePicker?.availableMany?.().catch(() => false)
+              : options.workspacePicker?.available().catch(() => false))) ?? false
           if (controller.signal.aborted && !response.writableEnded) return
           if (!available || !options.workspacePicker) {
             json(response, 503, { status: 'unavailable' })
             return
           }
-          const result = await options.workspacePicker
-            .pick(controller.signal)
-            .catch(() => ({ status: 'unavailable' }) as const)
+          const result = await (multiple
+            ? options.workspacePicker.pickMany?.(controller.signal)
+            : options.workspacePicker.pick(controller.signal)
+          )?.catch(() => ({ status: 'unavailable' }) as const)
           if (controller.signal.aborted && !response.writableEnded) return
-          if (
+          if (!result) {
+            json(response, 503, { status: 'unavailable' })
+            return
+          }
+          const invalidSelection =
             result.status === 'selected' &&
-            (result.path.length === 0 ||
-              result.path.length > 4096 ||
-              result.path.includes('\0') ||
-              !isAbsolute(result.path))
-          ) {
+            ('paths' in result
+              ? result.paths.length === 0 ||
+                result.paths.length > 32 ||
+                result.paths.some(
+                  (path) =>
+                    path.length === 0 || path.length > 4096 || path.includes('\0') || !isAbsolute(path),
+                )
+              : result.path.length === 0 ||
+                result.path.length > 4096 ||
+                result.path.includes('\0') ||
+                !isAbsolute(result.path))
+          if (invalidSelection) {
             json(response, 503, { status: 'unavailable' })
             return
           }

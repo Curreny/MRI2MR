@@ -1,18 +1,68 @@
 import { resolveLocale, tt } from '@agnes/cli-tui'
 
 const TITLE = (env: NodeJS.ProcessEnv): string => tt('picker.chooseWorkspace', resolveLocale(env))
+const FOLDER_TITLE = (env: NodeJS.ProcessEnv): string => tt('picker.chooseFolders', resolveLocale(env))
 
 // 提示语来自语言目录，要按脚本语言拼成字符串字面量再嵌入：漏掉引号或转义会让脚本文本非法，
 // macOS 上表现为 osascript 编译失败、选择器降级为不可用。
 const appleScriptText = (value: string): string => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 const powerShellText = (value: string): string => `'${value.replace(/'/g, "''")}'`
 
+// WinForms TopMost alone does not reliably promote a dialog launched by a background Web server.
+// Pin the invisible owner in the native topmost Z-order before opening the owned modal dialog.
+const windowsTopmostOwnerScript = `
+  Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class AgnesNativeWindow {
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool SetWindowPos(
+    IntPtr hWnd,
+    IntPtr hWndInsertAfter,
+    int X,
+    int Y,
+    int cx,
+    int cy,
+    uint uFlags
+  );
+
+  [DllImport("user32.dll")]
+  public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+'@
+  $owner = [System.Windows.Forms.Form]::new()
+  $owner.ShowInTaskbar = $false
+  $owner.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedToolWindow
+  $owner.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+  $owner.Location = [System.Drawing.Point]::new(-32000, -32000)
+  $owner.Size = [System.Drawing.Size]::new(1, 1)
+  $owner.Opacity = 0
+  $owner.TopMost = $true
+`.trim()
+
+const windowsShowTopmostOwnerScript = `
+    $owner.Show()
+    [AgnesNativeWindow]::SetWindowPos(
+      $owner.Handle,
+      [IntPtr](-1),
+      0,
+      0,
+      0,
+      0,
+      0x0001 -bor 0x0002 -bor 0x0040
+    ) | Out-Null
+    $owner.BringToFront()
+    $owner.Activate()
+    [AgnesNativeWindow]::SetForegroundWindow($owner.Handle) | Out-Null
+`.trim()
+
 import { spawn } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { posix, win32 } from 'node:path'
 import { createPlatform } from '@agnes/host'
-import type { WorkspacePicker, WorkspacePickerResult } from '@agnes/web/server'
+import type { WorkspacePicker, WorkspacePickerManyResult, WorkspacePickerResult } from '@agnes/web/server'
 
 const MAX_OUTPUT_BYTES = 16 * 1024
 
@@ -37,6 +87,37 @@ type PickerBackend = Readonly<{
   decode(result: PickerCommandResult): WorkspacePickerResult
 }>
 
+// The composer button is intentionally repeatable instead of using a fragile native multi-select
+// dialog. Each invocation selects one directory and returns it in the folder-picker API's `paths`
+// shape; users can click the button again to append another case to the same draft.
+const windowsFolderScript = (env: NodeJS.ProcessEnv) =>
+  `
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+try {
+  Add-Type -AssemblyName System.Windows.Forms
+  ${windowsTopmostOwnerScript}
+  $dialog = [System.Windows.Forms.FolderBrowserDialog]::new()
+  $dialog.Description = ${powerShellText(FOLDER_TITLE(env))}
+  $dialog.ShowNewFolderButton = $false
+  try {
+    ${windowsShowTopmostOwnerScript}
+    $choice = $dialog.ShowDialog($owner)
+    if ($choice -eq [System.Windows.Forms.DialogResult]::OK) { $selectedPath = $dialog.SelectedPath }
+  } finally {
+    $owner.Close()
+    $owner.Dispose()
+    $dialog.Dispose()
+  }
+  if ($choice -eq [System.Windows.Forms.DialogResult]::OK) {
+    $result = @{ status = 'selected'; paths = @($selectedPath) }
+  } else {
+    $result = @{ status = 'cancelled' }
+  }
+} catch { $result = @{ status = 'unavailable' } }
+[Console]::Out.Write(($result | ConvertTo-Json -Compress))
+`.trim()
+
 const macScript = (env: NodeJS.ProcessEnv) =>
   `
 tell application "Finder"
@@ -55,11 +136,21 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 try {
   Add-Type -AssemblyName System.Windows.Forms
+  ${windowsTopmostOwnerScript}
   $dialog = [System.Windows.Forms.FolderBrowserDialog]::new()
   $dialog.Description = ${powerShellText(TITLE(env))}
   $dialog.ShowNewFolderButton = $true
-  if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-    $result = @{ status = 'selected'; path = $dialog.SelectedPath }
+  try {
+    ${windowsShowTopmostOwnerScript}
+    $choice = $dialog.ShowDialog($owner)
+    if ($choice -eq [System.Windows.Forms.DialogResult]::OK) { $selectedPath = $dialog.SelectedPath }
+  } finally {
+    $owner.Close()
+    $owner.Dispose()
+    $dialog.Dispose()
+  }
+  if ($choice -eq [System.Windows.Forms.DialogResult]::OK) {
+    $result = @{ status = 'selected'; path = $selectedPath }
   } else {
     $result = @{ status = 'cancelled' }
   }
@@ -120,6 +211,29 @@ function structured(
     )
       return { status: 'unavailable' }
     return { status: 'selected', path: parsed.path }
+  } catch {
+    return { status: 'unavailable' }
+  }
+}
+
+function structuredMany(
+  result: PickerCommandResult,
+  absolute: (value: string) => boolean,
+): WorkspacePickerManyResult {
+  if (result.exitCode !== 0) return { status: 'unavailable' }
+  try {
+    const parsed = JSON.parse(result.stdout.trim()) as { status?: unknown; paths?: unknown }
+    if (parsed.status === 'cancelled') return { status: 'cancelled' }
+    if (parsed.status !== 'selected' || !Array.isArray(parsed.paths)) return { status: 'unavailable' }
+    const paths = parsed.paths.filter((path): path is string => typeof path === 'string')
+    if (
+      paths.length === 0 ||
+      paths.length > 32 ||
+      paths.length !== parsed.paths.length ||
+      paths.some((path) => path.length === 0 || path.length > 4096 || path.includes('\0') || !absolute(path))
+    )
+      return { status: 'unavailable' }
+    return { status: 'selected', paths: [...new Set(paths)] }
   } catch {
     return { status: 'unavailable' }
   }
@@ -266,6 +380,18 @@ export function createNativeWorkspacePicker(options: NativeWorkspacePickerOption
       if (!selected) return { status: 'unavailable' }
       try {
         return selected.decode(await run(selected.executable, selected.args, signal, childEnv))
+      } catch {
+        return { status: 'unavailable' }
+      }
+    },
+    availableMany: async () => platform === 'win32' && (await backend()) !== undefined,
+    pickMany: async (signal) => {
+      const selected = await backend()
+      if (!selected || platform !== 'win32') return { status: 'unavailable' }
+      try {
+        const args = [...selected.args]
+        args[args.length - 1] = Buffer.from(windowsFolderScript(env), 'utf16le').toString('base64')
+        return structuredMany(await run(selected.executable, args, signal, childEnv), win32.isAbsolute)
       } catch {
         return { status: 'unavailable' }
       }

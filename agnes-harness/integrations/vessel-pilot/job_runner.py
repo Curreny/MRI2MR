@@ -13,6 +13,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import nibabel as nib
+import numpy as np
+
+
+class PipelineFailure(RuntimeError):
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -36,7 +46,11 @@ def run_command(command: list[str], log_path: Path) -> None:
             env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"},
         )
     if completed.returncode != 0:
-        raise RuntimeError(f"Vascular command failed with exit code {completed.returncode}")
+        raise PipelineFailure(
+            "EXTERNAL_COMMAND_FAILED",
+            f"Vascular command failed with exit code {completed.returncode}",
+            {"exit_code": completed.returncode},
+        )
 
 
 def hash_file(path: Path) -> str:
@@ -45,6 +59,99 @@ def hash_file(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def clear_conversion_outputs(case_dir: Path) -> None:
+    patient_input = case_dir / "patient_input"
+    patient_input.mkdir(parents=True, exist_ok=True)
+    for stale_name in ("MRA.nii", "MRV.nii", "dicom_selection.json"):
+        (patient_input / stale_name).unlink(missing_ok=True)
+
+
+def conversion_result(case_dir: Path) -> dict[str, Any]:
+    outputs = {
+        "mra": case_dir / "patient_input" / "MRA.nii",
+        "mrv": case_dir / "patient_input" / "MRV.nii",
+    }
+    available = [
+        name for name, path in outputs.items() if path.is_file() and path.stat().st_size > 0
+    ]
+    missing = [name for name in outputs if name not in available]
+    selection_path = case_dir / "patient_input" / "dicom_selection.json"
+    selection: dict[str, Any] | None = None
+    if selection_path.is_file():
+        try:
+            loaded = json.loads(selection_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                selection = loaded
+        except (OSError, ValueError):
+            selection = None
+    if missing:
+        raise PipelineFailure(
+            "MISSING_REQUIRED_MODALITY",
+            "Conversion requires both MRA and MRV; missing: " + ", ".join(missing),
+            {
+                "required_modalities": ["mra", "mrv"],
+                "available_modalities": available,
+                "missing_modalities": missing,
+                "selection_report": str(selection_path) if selection_path.is_file() else None,
+                "selection": selection,
+            },
+        )
+    validation: dict[str, Any] = {}
+    for name, path in outputs.items():
+        try:
+            image = nib.load(str(path))
+            shape = [int(value) for value in image.shape]
+            affine = np.asarray(image.affine, dtype=float)
+            zooms = [float(value) for value in image.header.get_zooms()[:3]]
+            if len(shape) != 3 or any(value <= 1 for value in shape):
+                raise ValueError(f"expected non-degenerate 3D volume, got {shape}")
+            if affine.shape != (4, 4) or not np.isfinite(affine).all():
+                raise ValueError("affine contains non-finite values")
+            if len(zooms) != 3 or any(not np.isfinite(value) or value <= 0 for value in zooms):
+                raise ValueError(f"invalid voxel sizes: {zooms}")
+            validation[name] = {"shape": shape, "voxel_size": zooms}
+        except Exception as exc:
+            raise PipelineFailure(
+                "INVALID_CONVERTED_NIFTI",
+                f"Converted {name.upper()} is not a usable 3D NIfTI: {exc}",
+                {"modality": name, "path": str(path)},
+            ) from exc
+    if selection:
+        selected_sources: dict[str, str] = {}
+        for record in selection.get("records", []):
+            if not isinstance(record, dict):
+                continue
+            modality = str(record.get("modality", "")).lower()
+            selected = record.get("selected_candidate")
+            if (
+                modality in outputs
+                and isinstance(selected, dict)
+                and isinstance(selected.get("path"), str)
+            ):
+                selected_sources[modality] = selected["path"]
+        if (
+            "mra" in selected_sources
+            and "mrv" in selected_sources
+            and os.path.normcase(os.path.abspath(selected_sources["mra"]))
+            == os.path.normcase(os.path.abspath(selected_sources["mrv"]))
+        ):
+            raise PipelineFailure(
+                "AMBIGUOUS_MODALITY_SELECTION",
+                "MRA and MRV resolved to the same converted series",
+                {"selected_sources": selected_sources, "selection_report": str(selection_path)},
+            )
+    return {
+        "outputs": {name: str(path) for name, path in outputs.items()},
+        "artifacts": {
+            name: {"sha256": hash_file(path), "size": path.stat().st_size}
+            for name, path in outputs.items()
+        },
+        "validation": validation,
+        "selection_report": str(selection_path) if selection_path.is_file() else None,
+        "selection": selection,
+    }
 
 
 def main() -> int:
@@ -71,6 +178,12 @@ def main() -> int:
         payload = spec["payload"]
         if spec["kind"] == "conversion":
             set_phase("dicom_conversion")
+            clear_conversion_outputs(case_dir)
+            case_manifest_path = case_dir / "case.json"
+            case_manifest = json.loads(case_manifest_path.read_text(encoding="utf-8"))
+            case_manifest["conversion_status"] = "running"
+            case_manifest.pop("conversion_error", None)
+            atomic_json(case_manifest_path, case_manifest)
             command = [
                 python,
                 script,
@@ -90,20 +203,21 @@ def main() -> int:
                 command.extend(
                     ["--dicom-decompress-dcmtk", "--dcmtk-dcmdjpeg-exe", spec["dcmdjpeg_exe"]]
                 )
-            run_command(command, log_path)
-            outputs = {
-                "mra": case_dir / "patient_input" / "MRA.nii",
-                "mrv": case_dir / "patient_input" / "MRV.nii",
-            }
-            missing = [name for name, path in outputs.items() if not path.is_file()]
-            if missing:
-                raise RuntimeError(f"Conversion did not produce: {', '.join(missing)}")
-            case_manifest_path = case_dir / "case.json"
+            try:
+                run_command(command, log_path)
+            except PipelineFailure as exc:
+                raise PipelineFailure(
+                    "DICOM_CONVERSION_FAILED",
+                    str(exc),
+                    {**exc.details, "command_log": str(log_path)},
+                ) from exc
+            result = conversion_result(case_dir)
             case_manifest = json.loads(case_manifest_path.read_text(encoding="utf-8"))
             case_manifest["conversion_status"] = "succeeded"
             case_manifest["converted_at"] = now()
+            case_manifest["conversion_outputs"] = result["artifacts"]
+            case_manifest.pop("conversion_error", None)
             atomic_json(case_manifest_path, case_manifest)
-            result = {"outputs": {name: str(path) for name, path in outputs.items()}}
         elif spec["kind"] == "candidate":
             candidate_id = payload["candidate_id"]
             parameters = payload["parameters"]
@@ -168,6 +282,11 @@ def main() -> int:
                 case_manifest_path = Path(spec["case_dir"]) / "case.json"
                 case_manifest = json.loads(case_manifest_path.read_text(encoding="utf-8"))
                 case_manifest["conversion_status"] = "failed"
+                case_manifest["conversion_error"] = {
+                    "code": exc.code if isinstance(exc, PipelineFailure) else "PIPELINE_FAILED",
+                    "message": str(exc),
+                    "details": exc.details if isinstance(exc, PipelineFailure) else {},
+                }
                 atomic_json(case_manifest_path, case_manifest)
             except Exception:
                 pass
@@ -176,7 +295,11 @@ def main() -> int:
                 "status": "failed",
                 "phase": "failed",
                 "finished_at": now(),
-                "error": {"code": "PIPELINE_FAILED", "message": str(exc)},
+                "error": {
+                    "code": exc.code if isinstance(exc, PipelineFailure) else "PIPELINE_FAILED",
+                    "message": str(exc),
+                    "details": exc.details if isinstance(exc, PipelineFailure) else {},
+                },
             }
         )
         atomic_json(state_path, state)

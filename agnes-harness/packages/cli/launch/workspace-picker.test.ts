@@ -51,7 +51,48 @@ describe('native workspace picker', () => {
     await expect(picker.pick(new AbortController().signal)).resolves.toEqual({ status: 'unavailable' })
     expect(run.mock.calls[0]?.[1]).toContain('-STA')
     const encodedScript = run.mock.calls[0]?.[1].at(-1)
-    expect(Buffer.from(encodedScript ?? '', 'base64').toString('utf16le')).toContain('FolderBrowserDialog')
+    const script = Buffer.from(encodedScript ?? '', 'base64').toString('utf16le')
+    expect(script).toContain('FolderBrowserDialog')
+    expect(script).toContain('$owner.TopMost = $true')
+    expect(script).toContain('[AgnesNativeWindow]::SetWindowPos(')
+    expect(script).toContain('[AgnesNativeWindow]::SetForegroundWindow($owner.Handle)')
+    expect(script).toContain('$dialog.ShowDialog($owner)')
+  })
+
+  it('uses the repeatable Windows folder dialog and validates every returned path', async () => {
+    const run = vi
+      .fn<PickerCommandRunner>()
+      .mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: '{"status":"selected","paths":["C:\\\\dicom-a"]}',
+      })
+      .mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: '{"status":"selected","paths":["C:\\\\dicom","relative"]}',
+      })
+    const picker = createNativeWorkspacePicker({
+      platform: 'win32',
+      env: { SystemRoot: 'C:\\Windows', PATH: '' },
+      run,
+      findExecutable: async (candidates) => candidates[0],
+    })
+    await expect(picker.availableMany?.()).resolves.toBe(true)
+    await expect(picker.pickMany?.(new AbortController().signal)).resolves.toEqual({
+      status: 'selected',
+      paths: ['C:\\dicom-a'],
+    })
+    await expect(picker.pickMany?.(new AbortController().signal)).resolves.toEqual({
+      status: 'unavailable',
+    })
+    const encodedScript = run.mock.calls[0]?.[1].at(-1)
+    const script = Buffer.from(encodedScript ?? '', 'base64').toString('utf16le')
+    expect(script).toContain('FolderBrowserDialog')
+    expect(script).toContain('$owner.TopMost = $true')
+    expect(script).toContain('[AgnesNativeWindow]::SetWindowPos(')
+    expect(script).toContain('[AgnesNativeWindow]::SetForegroundWindow($owner.Handle)')
+    expect(script).toContain('$dialog.ShowDialog($owner)')
+    expect(script).toContain('paths = @($selectedPath)')
+    expect(script).toContain('Select a DICOM folder')
   })
 
   it('prefers Zenity, treats its exit 1 as cancel, and falls back to KDialog', async () => {

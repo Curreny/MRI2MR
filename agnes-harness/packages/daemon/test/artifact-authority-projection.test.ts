@@ -112,6 +112,7 @@ describe('artifact authority ledger projection', () => {
     ['tool:computer_use', 'untrusted'],
     ['tool:read', 'trusted'],
     ['tool:document_read', 'untrusted'],
+    ['tool:mcp_vessel_pilot_eb2efef3_evaluate_vessel_candidate', 'untrusted'],
   ] as const)(
     'projects a validated %s image before request-media preflight reads it',
     async (origin, trust) => {
@@ -162,6 +163,34 @@ describe('artifact authority ledger projection', () => {
     ['a trusted document image result', { origin: 'tool:document_read', trust: 'trusted', isError: false }],
     ['a failed document image result', { origin: 'tool:document_read', trust: 'untrusted', isError: true }],
     ['a failed session image result', { origin: 'tool:read', trust: 'trusted', isError: true }],
+    [
+      'a malformed MCP namespace',
+      {
+        origin: 'tool:mcp_vessel_pilot_nothex_evaluate_vessel_candidate',
+        trust: 'untrusted',
+        isError: false,
+      },
+    ],
+    [
+      'an MCP prefix without a remote tool name',
+      { origin: 'tool:mcp_vessel_pilot_eb2efef3_', trust: 'untrusted', isError: false },
+    ],
+    [
+      'a trusted MCP result',
+      {
+        origin: 'tool:mcp_vessel_pilot_eb2efef3_evaluate_vessel_candidate',
+        trust: 'trusted',
+        isError: false,
+      },
+    ],
+    [
+      'an overlong MCP tool name',
+      {
+        origin: `tool:mcp_vessel_pilot_eb2efef3_${'a'.repeat(40)}`,
+        trust: 'untrusted',
+        isError: false,
+      },
+    ],
   ])('does not project an image claimed by %s', async (_label, provenance) => {
     const f = await fixture()
     await f.projection.observe(

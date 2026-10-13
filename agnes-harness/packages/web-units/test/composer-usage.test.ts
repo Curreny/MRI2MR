@@ -10,6 +10,7 @@ import {
   type ComposerHandle,
   type ComposerView,
 } from '../src/composer.js'
+import { webUnitsLocaleCatalog } from '../src/locales/index.js'
 
 it('uses component ownership and disposes compatible custom factories on replacement and unmount', async () => {
   Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, value: true })
@@ -90,6 +91,64 @@ it('uses component ownership and disposes compatible custom factories on replace
     // Older custom factories with no disposal property still satisfy the injection contract.
     await render({ ...dependencies, createUsagePanel: () => vi.fn(() => {}) })
     await act(async () => root.render(null))
+  } finally {
+    await act(async () => root.unmount())
+    host.remove()
+  }
+})
+
+it('renders the optional DICOM folder button and delegates selection', async () => {
+  Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, value: true })
+  const host = document.createElement('section')
+  document.body.append(host)
+  const root = createRoot(host)
+  const onFolders = vi.fn()
+  const picker = () => ({ destroy: vi.fn(), render: vi.fn() })
+  const dependencies: ComposerDependencies = {
+    translate: (key) => webUnitsLocaleCatalog['zh-CN'][key] ?? key,
+    createModelPicker: picker,
+    createPermissionPicker: picker,
+    createUsagePanel: () => () => undefined,
+    isSubmitShortcut: () => false,
+    resize: () => undefined,
+  }
+  try {
+    await act(async () =>
+      root.render(
+        createElement(Composer, {
+          dependencies,
+          initialView: {
+            cancel: { disabled: true, hidden: true, label: '停止' },
+            connected: true,
+            configured: true,
+            hasSession: true,
+            hint: { kind: 'state', text: '' },
+            input: { disabled: false, placeholder: '' },
+            loading: false,
+            model: { accessibleName: 'model', disabled: true, label: 'model', options: [], pending: false },
+            permission: { disabled: true, pending: false, selected: 'workspace' },
+            sending: false,
+            send: { disabled: false, label: '发送', mode: 'idle', title: '发送' },
+            stopping: false,
+            usage: undefined,
+            workspace: { disabled: true, label: 'workspace', title: 'workspace' },
+            folder: { disabled: false, pending: false },
+          },
+          onCancel() {},
+          onDraftChange() {},
+          onError() {},
+          onSubmit() {},
+          onWorkspace() {},
+          onFolders,
+          onModelSelect: async () => false,
+          onPermissionSelect: async () => false,
+        }),
+      ),
+    )
+    const button = host.querySelector<HTMLButtonElement>('#composer-folders')
+    expect(button?.getAttribute('aria-label')).toBe('选择 DICOM 文件夹')
+    button?.click()
+    expect(onFolders).toHaveBeenCalledTimes(1)
   } finally {
     await act(async () => root.unmount())
     host.remove()

@@ -9,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -23,6 +24,14 @@ VEIN_TOLERANCES = (0.83, 0.85, 0.88)
 VEIN_MIN_SIZES = (800, 1000, 1500)
 TERMINAL_JOB_STATES = {"succeeded", "failed", "cancelled"}
 MAX_JOB_WAIT_SECONDS = 55
+DICOM_SUFFIXES = {".dcm", ".dicom", ".ima"}
+
+
+class VesselPilotInputError(ValueError):
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
 
 
 def utc_now() -> str:
@@ -83,11 +92,43 @@ def input_fingerprint(root: Path, files: Iterable[Path]) -> str:
     return digest.hexdigest()
 
 
+def has_dicom_preamble(path: Path) -> bool:
+    try:
+        if path.stat().st_size < 132:
+            return False
+        with path.open("rb") as stream:
+            stream.seek(128)
+            return stream.read(4) == b"DICM"
+    except OSError:
+        return False
+
+
+def dicom_input_preflight(files: list[Path]) -> dict[str, Any]:
+    non_empty = [path for path in files if path.stat().st_size > 0]
+    preamble_files = {path for path in non_empty if has_dicom_preamble(path)}
+    suffix_files = {path for path in non_empty if path.suffix.lower() in DICOM_SUFFIXES}
+    likely_dicom = preamble_files | suffix_files
+    non_dicom = [path for path in files if path not in likely_dicom]
+    warnings: list[str] = []
+    if non_dicom and likely_dicom:
+        warnings.append("mixed_non_dicom_files_ignored_by_converter")
+    if suffix_files - preamble_files:
+        warnings.append("dicom_suffix_without_standard_preamble")
+    return {
+        "likely_dicom_file_count": len(likely_dicom),
+        "standard_preamble_file_count": len(preamble_files),
+        "non_dicom_file_count": len(non_dicom),
+        "empty_file_count": len(files) - len(non_empty),
+        "warnings": warnings,
+    }
+
+
 @dataclass(frozen=True)
 class Settings:
     project_root: Path
     case_root: Path
     input_roots: tuple[Path, ...]
+    allow_any_input: bool
     python_exe: Path
     vascular_script: Path
     runner_script: Path
@@ -103,6 +144,7 @@ class Settings:
         server_file: Path,
         case_root: Path | None = None,
         input_roots: Iterable[Path] = (),
+        allow_any_input: bool = False,
     ) -> "Settings":
         project_root = server_file.resolve().parents[3]
         resolved_case_root = (case_root or project_root / "workspace" / "vessel-pilot").resolve()
@@ -113,6 +155,7 @@ class Settings:
             project_root=project_root,
             case_root=resolved_case_root,
             input_roots=roots,
+            allow_any_input=allow_any_input,
             python_exe=project_root / "runtime" / "python" / "BrainAAL" / "python.exe",
             vascular_script=project_root / "scripts" / "Vascular_cmd.py",
             runner_script=server_file.resolve().with_name("job_runner.py"),
@@ -131,6 +174,7 @@ class VesselPilotService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.settings.case_root.mkdir(parents=True, exist_ok=True)
+        self._conversion_lock = threading.Lock()
 
     def startup_check(self) -> dict[str, Any]:
         required = {
@@ -146,6 +190,7 @@ class VesselPilotService:
         return {
             "case_root": str(self.settings.case_root),
             "input_roots": [str(path) for path in self.settings.input_roots],
+            "allow_any_input": self.settings.allow_any_input,
             "runtime": {name: str(path) for name, path in required.items()},
         }
 
@@ -155,11 +200,33 @@ class VesselPilotService:
             return {"status": "unavailable", "message": "The folder picker is only available on Windows."}
         script = (
             "Add-Type -AssemblyName System.Windows.Forms; "
+            "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; "
+            "public static class VesselPilotNativeWindow { "
+            "[DllImport(\"user32.dll\", SetLastError=true)] "
+            "public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, "
+            "int X, int Y, int cx, int cy, uint uFlags); "
+            "[DllImport(\"user32.dll\")] "
+            "public static extern bool SetForegroundWindow(IntPtr hWnd); }'; "
+            "$owner = New-Object System.Windows.Forms.Form; "
+            "$owner.ShowInTaskbar = $false; "
+            "$owner.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedToolWindow; "
+            "$owner.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual; "
+            "$owner.Location = [System.Drawing.Point]::new(-32000, -32000); "
+            "$owner.Size = [System.Drawing.Size]::new(1, 1); "
+            "$owner.Opacity = 0; "
+            "$owner.TopMost = $true; "
             "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog; "
             "$dialog.Description = 'Select a deidentified DICOM folder'; "
             "$dialog.ShowNewFolderButton = $false; "
-            "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) "
-            "{ [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Write-Output $dialog.SelectedPath }"
+            "$owner.Show(); "
+            "[VesselPilotNativeWindow]::SetWindowPos($owner.Handle, [IntPtr](-1), 0, 0, 0, 0, "
+            "(0x0001 -bor 0x0002 -bor 0x0040)) | Out-Null; "
+            "$owner.BringToFront(); $owner.Activate(); "
+            "[VesselPilotNativeWindow]::SetForegroundWindow($owner.Handle) | Out-Null; "
+            "try { $choice = $dialog.ShowDialog($owner); "
+            "if ($choice -eq [System.Windows.Forms.DialogResult]::OK) "
+            "{ [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Write-Output $dialog.SelectedPath } "
+            "} finally { $owner.Close(); $owner.Dispose(); $dialog.Dispose() }"
         )
         completed = subprocess.run(
             ["powershell.exe", "-NoProfile", "-STA", "-Command", script],
@@ -178,7 +245,9 @@ class VesselPilotService:
         source = Path(selected).resolve(strict=True)
         if not source.is_dir():
             raise ValueError("Selected path is not a directory")
-        if not any(is_within(source, root) for root in self.settings.input_roots):
+        if not self.settings.allow_any_input and not any(
+            is_within(source, root) for root in self.settings.input_roots
+        ):
             return {
                 "status": "outside_input_roots",
                 "selected_path": str(source),
@@ -202,16 +271,41 @@ class VesselPilotService:
     ) -> dict[str, Any]:
         if confirm_deidentified is not True:
             raise ValueError("confirm_deidentified must be true before local DICOM processing")
-        source = Path(input_path).expanduser().resolve(strict=True)
+        try:
+            source = Path(input_path).expanduser().resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise VesselPilotInputError(
+                "INPUT_PATH_UNAVAILABLE", "input_path does not exist or cannot be read"
+            ) from exc
         if not source.is_dir():
-            raise ValueError("input_path must be a DICOM directory")
-        if not any(is_within(source, root) for root in self.settings.input_roots):
-            raise ValueError("input_path is outside configured input roots")
+            raise VesselPilotInputError("INPUT_NOT_DIRECTORY", "input_path must be a DICOM directory")
+        if not self.settings.allow_any_input and not any(
+            is_within(source, root) for root in self.settings.input_roots
+        ):
+            raise VesselPilotInputError(
+                "INPUT_OUTSIDE_ROOT", "input_path is outside configured input roots"
+            )
+        symlinks = [path for path in source.rglob("*") if path.is_symlink()]
+        if symlinks:
+            raise VesselPilotInputError(
+                "INPUT_SYMLINK_UNSUPPORTED",
+                "input_path must not contain symbolic links",
+                {"symlink_count": len(symlinks)},
+            )
         files = [path for path in source.rglob("*") if path.is_file()]
         if not files:
-            raise ValueError("input_path contains no files")
+            raise VesselPilotInputError("INPUT_EMPTY", "input_path contains no files")
         if len(files) > 200_000:
-            raise ValueError("input_path exceeds the 200000-file safety limit")
+            raise VesselPilotInputError(
+                "INPUT_TOO_MANY_FILES", "input_path exceeds the 200000-file safety limit"
+            )
+        preflight = dicom_input_preflight(files)
+        if preflight["likely_dicom_file_count"] == 0:
+            raise VesselPilotInputError(
+                "INPUT_NO_DICOM_FILES",
+                "input_path contains files but no recognizable DICOM files",
+                preflight,
+            )
         total_bytes = sum(path.stat().st_size for path in files)
         chosen_id = case_id or f"case-{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:8]}"
         validate_id(chosen_id, "case_id")
@@ -232,6 +326,7 @@ class VesselPilotService:
             "input_fingerprint": fingerprint,
             "input_file_count": len(files),
             "input_total_bytes": total_bytes,
+            "input_preflight": preflight,
             "deidentification": "user_confirmed_not_verified",
             "conversion_status": "not_started",
         }
@@ -240,6 +335,11 @@ class VesselPilotService:
 
     def case_status(self, case_id: str) -> dict[str, Any]:
         case_dir, manifest = self._load_case(case_id)
+        mra = case_dir / "patient_input" / "MRA.nii"
+        mrv = case_dir / "patient_input" / "MRV.nii"
+        has_mra = mra.is_file() and mra.stat().st_size > 0
+        has_mrv = mrv.is_file() and mrv.stat().st_size > 0
+        selection_path = case_dir / "patient_input" / "dicom_selection.json"
         candidates_dir = case_dir / "candidates"
         candidates = []
         if candidates_dir.is_dir():
@@ -251,10 +351,16 @@ class VesselPilotService:
             "input_fingerprint": manifest["input_fingerprint"],
             "input_file_count": manifest["input_file_count"],
             "input_total_bytes": manifest["input_total_bytes"],
+            "input_preflight": manifest.get("input_preflight"),
             "deidentification": manifest["deidentification"],
             "conversion_status": manifest.get("conversion_status", "unknown"),
-            "has_mra": (case_dir / "patient_input" / "MRA.nii").is_file(),
-            "has_mrv": (case_dir / "patient_input" / "MRV.nii").is_file(),
+            "conversion_error": manifest.get("conversion_error"),
+            "has_mra": has_mra,
+            "has_mrv": has_mrv,
+            "conversion_ready": manifest.get("conversion_status") == "succeeded"
+            and has_mra
+            and has_mrv,
+            "dicom_selection": read_json(selection_path) if selection_path.is_file() else None,
             "candidates": candidates,
         }
 
@@ -316,18 +422,71 @@ class VesselPilotService:
         return state
 
     def start_conversion(self, case_id: str, decompress_with_dcmtk: bool = True) -> dict[str, Any]:
-        case_dir, manifest = self._load_case(case_id)
-        if (case_dir / "patient_input" / "MRA.nii").is_file() and (
-            case_dir / "patient_input" / "MRV.nii"
-        ).is_file():
-            return {"case_id": case_id, "status": "already_succeeded"}
-        manifest["conversion_status"] = "queued"
-        atomic_json(case_dir / "case.json", manifest)
-        return self._create_job(
-            case_id,
-            "conversion",
-            {"source_path": manifest["source_path"], "decompress_with_dcmtk": decompress_with_dcmtk},
-        )
+        with self._conversion_lock:
+            case_dir, manifest = self._load_case(case_id)
+            mra = case_dir / "patient_input" / "MRA.nii"
+            mrv = case_dir / "patient_input" / "MRV.nii"
+            if (
+                manifest.get("conversion_status") == "succeeded"
+                and mra.is_file()
+                and mra.stat().st_size > 0
+                and mrv.is_file()
+                and mrv.stat().st_size > 0
+            ):
+                return {"case_id": case_id, "status": "already_succeeded"}
+            active_job_id = manifest.get("conversion_job_id")
+            if manifest.get("conversion_status") in {"queued", "running"} and isinstance(
+                active_job_id, str
+            ):
+                try:
+                    snapshot = self._job_snapshot(active_job_id, case_id)
+                    if snapshot.get("status") not in TERMINAL_JOB_STATES:
+                        snapshot["already_running"] = True
+                        return snapshot
+                except ValueError:
+                    pass
+            try:
+                source = Path(manifest["source_path"]).resolve(strict=True)
+                entries = list(source.rglob("*"))
+                files = [path for path in entries if path.is_file()]
+            except (OSError, RuntimeError) as exc:
+                raise VesselPilotInputError(
+                    "INPUT_CHANGED_SINCE_INSPECTION",
+                    "input_path changed or became unreadable after inspection",
+                ) from exc
+            if any(path.is_symlink() for path in entries):
+                raise VesselPilotInputError(
+                    "INPUT_CHANGED_SINCE_INSPECTION",
+                    "input_path changed after inspection; inspect it again before conversion",
+                    {"reason": "symbolic_link_added"},
+                )
+            try:
+                current_fingerprint = input_fingerprint(source, files)
+            except OSError as exc:
+                raise VesselPilotInputError(
+                    "INPUT_CHANGED_SINCE_INSPECTION",
+                    "input_path changed while conversion was being prepared",
+                ) from exc
+            if current_fingerprint != manifest["input_fingerprint"]:
+                raise VesselPilotInputError(
+                    "INPUT_CHANGED_SINCE_INSPECTION",
+                    "input_path changed after inspection; inspect it again before conversion",
+                )
+            manifest["conversion_status"] = "queued"
+            manifest.pop("conversion_error", None)
+            atomic_json(case_dir / "case.json", manifest)
+            job = self._create_job(
+                case_id,
+                "conversion",
+                {
+                    "source_path": manifest["source_path"],
+                    "decompress_with_dcmtk": decompress_with_dcmtk,
+                },
+            )
+            manifest = read_json(case_dir / "case.json")
+            manifest["conversion_job_id"] = job["job_id"]
+            atomic_json(case_dir / "case.json", manifest)
+            return job
 
     def start_candidate(
         self,
@@ -344,11 +503,24 @@ class VesselPilotService:
             raise ValueError(f"mrv_weak_grow_tolerance must be one of {VEIN_TOLERANCES}")
         if int(mrv_post_process_min_size) not in VEIN_MIN_SIZES:
             raise ValueError(f"mrv_post_process_min_size must be one of {VEIN_MIN_SIZES}")
-        case_dir, _ = self._load_case(case_id)
-        if not (case_dir / "patient_input" / "MRA.nii").is_file() or not (
-            case_dir / "patient_input" / "MRV.nii"
-        ).is_file():
+        case_dir, manifest = self._load_case(case_id)
+        inputs = (case_dir / "patient_input" / "MRA.nii", case_dir / "patient_input" / "MRV.nii")
+        if manifest.get("conversion_status") != "succeeded" or any(
+            not path.is_file() or path.stat().st_size == 0 for path in inputs
+        ):
             raise ValueError("DICOM conversion must succeed before candidate generation")
+        recorded_outputs = manifest.get("conversion_outputs")
+        if isinstance(recorded_outputs, dict):
+            for name, path in zip(("mra", "mrv"), inputs):
+                recorded = recorded_outputs.get(name)
+                if (
+                    not isinstance(recorded, dict)
+                    or recorded.get("size") != path.stat().st_size
+                    or recorded.get("sha256") != sha256_file(path)
+                ):
+                    raise ValueError(
+                        "Converted inputs changed after validation; rerun DICOM conversion"
+                    )
         candidate_dir = case_dir / "candidates" / candidate_id
         if candidate_dir.exists():
             raise ValueError(f"candidate_id already exists and is immutable: {candidate_id}")
@@ -530,6 +702,57 @@ class VesselPilotService:
         }
 
     @staticmethod
+    def _load_mesh(path: Path) -> Any:
+        import trimesh
+
+        loaded = trimesh.load(str(path), force="scene")
+        if isinstance(loaded, trimesh.Scene):
+            meshes = [item for item in loaded.geometry.values() if isinstance(item, trimesh.Trimesh)]
+            if not meshes:
+                raise ValueError(f"No mesh geometry in {path.name}")
+            return trimesh.util.concatenate(meshes)
+        return loaded
+
+    def _vein_distribution_proxy(self, artery_path: Path, vein_path: Path) -> dict[str, Any]:
+        """Estimate central vs peripheral venous surface area using the artery envelope.
+
+        This is deliberately a technical proxy, not anatomical segmentation: the artery model
+        supplies a case-specific intracranial spatial envelope, expanded by 15 percent on every
+        axis.  Vein triangle centroids outside that envelope are treated as scalp/peripheral
+        candidates so candidates from the same case can be compared during tuning.
+        """
+        import numpy as np
+
+        artery_mesh = self._load_mesh(artery_path)
+        vein_mesh = self._load_mesh(vein_path)
+        bounds = np.asarray(artery_mesh.bounds, dtype=float)
+        extents = np.maximum(bounds[1] - bounds[0], 1e-9)
+        lower = bounds[0] - extents * 0.15
+        upper = bounds[1] + extents * 0.15
+        centers = np.asarray(vein_mesh.triangles_center, dtype=float)
+        areas = np.asarray(vein_mesh.area_faces, dtype=float)
+        if len(centers) == 0 or len(areas) == 0 or not np.isfinite(areas).all():
+            raise ValueError("Vein mesh has no finite triangle areas")
+        inside = np.logical_and(centers >= lower, centers <= upper).all(axis=1)
+        total = float(areas.sum())
+        if total <= 0:
+            raise ValueError("Vein mesh has zero surface area")
+        intracranial = float(areas[inside].sum())
+        scalp = max(0.0, total - intracranial)
+        return {
+            "method": "expanded_artery_aabb_v1",
+            "artery_envelope_margin_fraction": 0.15,
+            "intracranial_proxy_area_ratio": round(intracranial / total, 6),
+            "scalp_peripheral_proxy_area_ratio": round(scalp / total, 6),
+            "intracranial_proxy_area": round(intracranial, 6),
+            "scalp_peripheral_proxy_area": round(scalp, 6),
+            "total_vein_area": round(total, 6),
+            "interpretation": (
+                "Technical within-case comparison only; not a skull segmentation or clinical anatomical label."
+            ),
+        }
+
+    @staticmethod
     def _render_previews(mesh: Any, output: Path, color: tuple[int, int, int]) -> None:
         from PIL import Image, ImageDraw
         import numpy as np
@@ -597,6 +820,12 @@ class VesselPilotService:
                 metrics[name] = self._mesh_metrics(path, candidate_dir / "previews" / name, color)
             except Exception as exc:
                 errors.append(f"{name}: {exc}")
+        vein_distribution_proxy: dict[str, Any] | None = None
+        if not errors:
+            try:
+                vein_distribution_proxy = self._vein_distribution_proxy(artery, vein)
+            except Exception as exc:
+                errors.append(f"vein_distribution_proxy: {exc}")
         limits = {
             "max_glb_bytes": self.settings.max_glb_bytes,
             "max_vertices": self.settings.max_vertices,
@@ -622,6 +851,7 @@ class VesselPilotService:
             "clinical_quality_review_required": True,
             "limits": limits,
             "metrics": metrics,
+            "vein_distribution_proxy": vein_distribution_proxy,
             "violations": violations,
             "conclusion": conclusion,
             "preview_root": str(candidate_dir / "previews"),
@@ -642,9 +872,13 @@ class VesselPilotService:
     ) -> dict[str, Any]:
         """Turn a visual assessment into one safe, untried, one-parameter change."""
         based_on_candidate_id = validate_id(based_on_candidate_id, "based_on_candidate_id")
-        allowed = {"good", "too_dense", "too_sparse", "uncertain"}
-        if artery_assessment not in allowed or vein_assessment not in allowed:
-            raise ValueError(f"assessments must be one of {sorted(allowed)}")
+        artery_allowed = {"good", "too_dense", "too_sparse", "uncertain"}
+        vein_allowed = artery_allowed | {"scalp_dominant", "intracranial_sparse"}
+        if artery_assessment not in artery_allowed or vein_assessment not in vein_allowed:
+            raise ValueError(
+                f"artery_assessment must be one of {sorted(artery_allowed)}; "
+                f"vein_assessment must be one of {sorted(vein_allowed)}"
+            )
         case_dir, _ = self._load_case(case_id)
         candidate_dir = case_dir / "candidates" / based_on_candidate_id
         parameters_path = candidate_dir / "parameters.json"
@@ -684,9 +918,19 @@ class VesselPilotService:
             reason = "reduce artery density/noise" if direction > 0 else "recover missing artery branches"
             for value in directional(ARTERY_THRESHOLDS, base_tuple[0], direction):
                 proposals.append(((value, base_tuple[1], base_tuple[2]), reason))
-        if vein_assessment in {"too_dense", "too_sparse"}:
-            direction = 1 if vein_assessment == "too_dense" else -1
-            reason = "reduce vein density/noise" if direction > 0 else "recover missing vein branches"
+        if vein_assessment in {
+            "too_dense",
+            "too_sparse",
+            "scalp_dominant",
+            "intracranial_sparse",
+        }:
+            direction = 1 if vein_assessment in {"too_dense", "scalp_dominant"} else -1
+            if vein_assessment == "scalp_dominant":
+                reason = "reduce scalp/peripheral vein proxy while preserving intracranial branches"
+            elif vein_assessment == "intracranial_sparse":
+                reason = "recover intracranial vein branches"
+            else:
+                reason = "reduce vein density/noise" if direction > 0 else "recover missing vein branches"
             for value in directional(VEIN_TOLERANCES, base_tuple[1], direction):
                 proposals.append(((base_tuple[0], value, base_tuple[2]), reason))
             for value in directional(VEIN_MIN_SIZES, base_tuple[2], direction):
