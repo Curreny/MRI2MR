@@ -147,6 +147,8 @@ it('renders the optional DICOM folder button and delegates selection', async () 
     )
     const button = host.querySelector<HTMLButtonElement>('#composer-folders')
     expect(button?.getAttribute('aria-label')).toBe('选择 DICOM 文件夹')
+    expect(button?.querySelector('.composer-folder-label')?.textContent).toBe('选择 DICOM 文件夹')
+    expect(button?.querySelector('.visually-hidden')).toBeNull()
     button?.click()
     expect(onFolders).toHaveBeenCalledTimes(1)
   } finally {

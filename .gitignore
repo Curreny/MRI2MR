@@ -4,7 +4,7 @@ venv/
 mri_reface/
 
 # Generated patient-study workspace data.
-workspace/
+/workspace/
 logs/
 
 # Local editor and Python cache files.

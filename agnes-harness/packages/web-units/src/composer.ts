@@ -1067,7 +1067,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
               ),
               createElement(
                 'span',
-                { className: 'visually-hidden' },
+                { className: 'composer-folder-label' },
                 view.folder.pending
                   ? dependencies.translate('composer.folder.opening')
                   : dependencies.translate('composer.folder.add'),

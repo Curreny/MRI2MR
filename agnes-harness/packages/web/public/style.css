@@ -6540,6 +6540,14 @@ body.admin-page {
   }
 }
 
+#composer-folders {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 #composer-attach {
   display: grid;
   place-items: center;

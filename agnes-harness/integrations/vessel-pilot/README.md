@@ -82,6 +82,8 @@ If Agnes says that `vessel-pilot` or its tools do not exist:
 
 The user may paste one or more absolute DICOM directory paths into the chat, ask Agnes to choose one folder through `choose_dicom_folder`, or use the folder button beside the composer attachment control. Both Windows picker entry points use an invisible modal owner that is pinned to the native topmost Z-order with `SetWindowPos(HWND_TOPMOST)` and promoted with `SetForegroundWindow`, so the dialog stays above the browser even when it is launched by the background Web or MCP process. The composer button inserts one reviewable path; click it repeatedly to append more cases to the same draft. It does not upload or copy DICOM files. Selecting folders does not count as confirmation that the data is deidentified.
 
+The composer entry has a visible “Select a DICOM folder” label beside the attachment control. If it is missing and `GET /api/folder-picker` returns 404, the Web service is running an older build: rebuild the local CLI and restart the Web service with the same `AGH_HOME`, then reload the browser. Updating source files alone does not update `dist/local`.
+
 After either entry path, `inspect_dicom_case` performs the same allowlist and file-count checks. The model never receives permission to browse arbitrary directories.
 
 Example chat requests:
