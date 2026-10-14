@@ -1,458 +1,130 @@
-# MRI2MR Core — 用户使用指南
+# MRI2MR · VesselPilot
 
-> 本指南帮助你了解 MRI2MR Core 是什么、如何启动、如何使用，并覆盖所有内置处理模式。
-> 本文件为自动生成，不包含对任何已有文件的新修改（仅为新增 README）。
+MRI2MR 当前提供一个面向脑血管 MRI 的本地工作流：通过 [Agnes Harness](agnes-harness/README.zh-CN.md) 的网页对话，检查已脱敏的 DICOM 目录，将序列转换为 NIfTI，并从 MRA、MRV 重建动脉、静脉的 GLB 三维模型。影像处理由 [`scripts/Vascular_cmd.py`](scripts/Vascular_cmd.py) 执行，Agnes 的 VesselPilot 集成负责选择输入、管理任务、展示预览和保存结果。
 
----
+> 当前入口面向 Windows 本地使用。重建结果及自动质控仅供研究和技术检查，不能代替临床判读。请仅使用已脱敏、获准处理的数据；DICOM 可能包含可识别的患者信息。
 
-## 一、项目概述
+## 功能与输入输出
 
-**MRI2MR Core** 是一个面向脑 MRI 影像分析的桌面 Web 工具，核心功能：
+| 任务          | 输入                                     | 主要输出                                            |
+| ------------- | ---------------------------------------- | --------------------------------------------------- |
+| DICOM 预检    | 一个已脱敏的本地 DICOM 目录              | 文件统计、序列抽样预览、病例 ID；不会启动转换或重建 |
+| DICOM → NIfTI | 含可转换 DICOM 序列的目录                | `patient_input/nifti/*.nii` 及各文件的实际路径      |
+| 动脉重建      | 含可用三维 MRA 序列的 DICOM 目录         | `MRA.nii`、候选 `artery.glb`、预览和质控报告        |
+| 静脉重建      | 含可用三维 MRV 序列的 DICOM 目录         | `MRV.nii`、候选 `vein.glb`、预览和质控报告          |
+| 动静脉重建    | 同一病例中分别可用的三维 MRA 与 MRV 序列 | 两侧 GLB、预览和质控报告                            |
 
-1. **DICOM → NIfTI 转换**：将原始 DICOM 序列（T1、MRA、MRV、DTI）自动识别并转为 NIfTI 格式。
-2. **组织分割**：支持 SPM（MATLAB）和 SynthSeg（Docker）两种分割后端，生成灰质/白质/DK 脑区标签图。
-3. **3D 模型生成**：基于分割结果，导出 GLB 格式的三维模型（脑区、脑叶、脑半球、脑室、动脉、静脉、纤维束等）。
-4. **纤维追踪**：基于 DTI / DKI 数据，利用 DIPY 进行确定性纤维追踪，导出纤维束模型。
+重建请求默认会在有限候选数内尝试调参、比较结果。可明确要求“只运行一次”或固定参数。当前对话工作流可调整的参数只有动脉阈值 `vessel_threshold`、静脉弱生长容差 `mrv_weak_grow_tolerance` 和静脉最小区域大小 `mrv_post_process_min_size`；其他重建参数使用默认值。单独转换 NIfTI 不会启动重建。
 
-整个流程由 Web UI 驱动，后台通过 FastAPI + 子进程调用 Python 主脚本 `scripts/Main_cmd.py` 完成实际处理。
+## 环境依赖
 
----
+- Windows 10/11、PowerShell、Git。
+- Node.js **24.10 或更新**，以及通过 Corepack 使用的 **pnpm 10.34.5**（版本由 `agnes-harness/package.json` 固定）。从源码构建 Agnes 的 Windows 原生组件还需要 Visual Studio C++ Build Tools 和 Windows SDK；详见 [Agnes Windows 构建说明](agnes-harness/docs/guide/install.zh-CN.md#windows-构建)。
+- Conda（Miniconda 或 Anaconda），用于从 [`environment.yml`](environment.yml) 创建 Python 3.9 的 `BrainAAL` 环境。该环境包含 NumPy、NiBabel、pydicom、SimpleITK、trimesh 等处理依赖。
+- 仓库内的 `dcm2niix_win/dcm2niix.exe` 和 `dcmtk-3.7.0-win64-dynamic/`，用于 DICOM 转换与压缩影像解码。不要只复制 Python 脚本而遗漏这两个目录。
+- 一个可在 Agnes 中配置的模型账号。若需要自动查看重建预览并评估候选，所选模型应支持图像输入；否则需要人工复核。
 
-## 二、目录结构速览
+本仓库不会提交 `node_modules/`、Conda 环境、患者数据或运行输出。克隆后需自行安装依赖。当前 VesselPilot 流程不依赖旧版 MRI2MR Core 的 FastAPI 页面、SPM 或 Docker 分割流程。
 
-```
-MRI2MR-core/
-├── app/
-│   ├── backend/          # FastAPI 后端（API 路由、任务管理、病人管理）
-│   │   ├── main.py       # 主入口，定义所有 REST API
-│   │   ├── jobs.py       # 任务（Job）生命周期管理
-│   │   ├── patients.py   # 病人工作区管理
-│   │   ├── command_builder.py  # 命令行构建（将 JSON 配置转为 CLI 参数）
-│   │   ├── config.py     # 加载 app_settings.json
-│   │   ├── modes.py      # 加载 modes.json（各处理模式定义）
-│   │   ├── inspectors.py # DICOM 序列检测、路径检查
-│   │   └── preview.py    # NIfTI 切片预览渲染
-│   └── static/           # Web UI（HTML/CSS/JS + Three.js）
-│       ├── index.html    # 主界面
-│       ├── app.js        # 前端逻辑
-│       └── vendor/       # 依赖库（three.js 等）
-├── config/
-│   ├── app_settings.json # 全局路径和后端配置
-│   └── modes.json       # 所有处理模式的字段定义（CLI 参数映射）
-├── scripts/
-│   ├── Main_cmd.py       # 核心处理脚本（DICOM 转换、分割、建模、纤维追踪）
-│   ├── Utils/            # 工具函数（仿射矩阵、路径处理等）
-│   └── run_spm_segmentation.m  # SPM 分割 MATLAB 脚本
-├── spm/                  # SPM 源码目录（需与 MATLAB 配合使用）
-├── template/             # 模板文件（DK_Regions.txt、DK_Lobes.txt、ROI_ED_Filter.nii.gz）
-├── dcm2niix_win/         # dcm2niix 可执行文件（DICOM 转 NIfTI）
-├── dcmtk-3.7.0-win64-dynamic/  # DCMTK 工具（DICOM 解压）
-├── runtime/python/       # 打包产物中的可移植 Python 环境（源码仓库未跟踪）
-├── workspace/            # 病人工作区根目录（每次运行生成子目录）
-├── logs/                 # 运行日志
-├── start_core.bat        # 一键启动脚本
-└── requirements-webui.txt  # Web 后端依赖
-```
+## 安装与启动
 
----
+以下命令在项目根目录的 **PowerShell** 中执行。
 
-## 三、系统要求
+1. 创建并激活 Python 环境：
 
-| 组件 | 说明 |
-|------|------|
-| **Windows 10/11** | 主操作系统 |
-| **MATLAB（含 SPM12）** | 用于 SPM 分割；路径可在 `config/app_settings.json` 中配置 |
-| **Docker Desktop** | 用于运行 SynthSeg 容器（`pwesp/synthseg:py38`） |
-| **可移植 Python 环境** | `start_core.bat` 需要 `runtime/python/BrainAAL/python.exe`；当前源码仓库未跟踪该环境 |
-| **DICOM 文件** | 包含 T1、MRA、MRV、DTI 等序列的 DICOM 文件夹 |
+   ```powershell
+   conda env create -f .\environment.yml
+   conda activate BrainAAL
+   ```
 
-> 当前 Git 仓库未跟踪 `runtime/` 文件。`.gitattributes` 中的 Git LFS 规则不会自行提供 Python 环境；克隆后需要另行准备运行环境或使用已打好的 Core 包。`requirements-webui.txt` 只覆盖 WebUI 依赖，不能重建全部影像处理依赖。
+2. 安装并构建 Agnes Harness：
 
-### 可配置路径（`config/app_settings.json`）
+   ```powershell
+   cd .\agnes-harness
+   corepack pnpm install --frozen-lockfile
+   .\.github\scripts\prepare-windows-native.ps1 -CacheRoot "$env:LOCALAPPDATA\node-gyp\Cache"
+   corepack pnpm --filter @agnes/cli build:local
+   cd ..
+   ```
 
-- `MATLAB_EXE`：matlab.exe 完整路径（不在 PATH 时必须填写）
-- `SPM_DIR`：SPM 源码目录（默认 `spm/`）
-- `SPM_BACKEND`：`matlab_cli`（调用 MATLAB 命令行）
-- `SYNTHSEG_DOCKER_IMAGE`：SynthSeg Docker 镜像名
-- `DCM2NIIX_EXE`：dcm2niix 可执行文件路径
-- `PYTHON_EXE`：主脚本使用的 Python 解释器路径
+   构建完成后应存在 `agnes-harness/packages/cli/dist/local/agnes.mjs`。若已有与当前源码对应的构建产物，可跳过构建。更新 Agnes 源码后需重新构建并重启服务。
 
----
+3. 启动本地服务：
 
-## 四、启动方法
+   ```powershell
+   .\start_agnes.ps1
+   ```
 
-### Agnes Harness（Agent 页面，端口 4177）
+   浏览器访问 <http://127.0.0.1:4177>。更换端口可运行 `.\start_agnes.ps1 -Port 4180`；只检查和注册 VesselPilot 可运行 `.\start_agnes.ps1 -SetupOnly`。脚本会寻找已激活的 `BrainAAL` Conda 环境，也支持项目内 `runtime/python/BrainAAL/python.exe` 或 `venv/runtime/python/BrainAAL/python.exe`，并检查所需 Python 包。它使用项目根目录作为 Agnes 工作区，运行状态保存在 `agnes-harness/agh-home/`。
 
-在本项目根目录的 PowerShell 中运行：
+4. 首次打开网页时，按提示配置模型。然后在 **Settings → MCP** 确认 `VesselPilot` 已受信任并启用；在 **Settings → Skills** 刷新工作区来源、确认 `vessel-pilot` 已启用。新建任务时确认工作目录为本项目根目录。配置细节见 [VesselPilot 集成说明](agnes-harness/integrations/vessel-pilot/README.md#start-or-register-in-agnes-harness)。
 
-```powershell
-.\start_agnes.ps1
+## 输入数据集格式
+
+输入是**一个病例对应的 `MR` 目录**，路径形式为 `数据集/<病例编号>/Data_vessel_<编号>/<检查日期>/MR/`。`MR` 下按序列建目录，每个序列的原始影像放在其 `dcm/` 子目录。VesselPilot 会递归检查选中的目录；DICOM 文件可使用 `.dcm`、`.dicom`、`.ima` 后缀，或包含标准 DICOM `DICM` 文件头。按本地样例整理后的结构如下（文件名和数量仅作示意）：
+
+```text
+数据集\
+└── A01\
+    └── Data_vessel_01\
+        └── 20260208\
+            └── MR\                         ← 在对话中选择或提供此目录
+                ├── 401_tof3d_tra\          ← 名称含 TOF 的序列
+                │   ├── dcm\
+                │   │   └── *.dcm
+                │   ├── *.nii
+                │   ├── *.png
+                │   └── *.txt
+                └── 501_pc3d_sag_veins_CD\  ← 名称含 veins 的序列
+                    ├── dcm\
+                    │   └── *.dcm
+                    ├── *.nii
+                    ├── *.png
+                    └── *.txt
 ```
 
-脚本固定使用本项目的 `agnes-harness/agh-home` 和 `local-dev` profile，即使终端里残留旧的 `AGH_HOME`，也会以本项目根目录作为 Agnes 工作区。默认打开 `http://127.0.0.1:4177`；如需其他端口，可运行 `.\start_agnes.ps1 -Port 4180`。修改模型账号、MCP 或 Skill 时，请沿用这个 `AGH_HOME`，避免连接到另一套实例。
+- 上述样例的两个 `dcm/` 分别包含 276 和 260 个 `.dcm` 文件；同级现有的 `.nii`、`.png`、`.txt` 是伴随文件，提交输入时仍选择共同的 `MR` 目录。序列名称和每组切片数可以因病例而异，不能仅凭目录名判定模态，转换后还需核对选择结果。
+- **仅转 NIfTI：**只要有可转换的 DICOM 序列即可，不要求 MRA/MRV 成对出现。
+- **动脉：**需要可用的三维 MRA；**静脉：**需要可用的三维 MRV；**双侧：**需要来自不同源序列的 MRA 和 MRV。T1 或其他序列可以同时存在，但不能代替所需模态。
+- MIP、MPR、定位像，以及不符合要求的二维、四维或退化体数据不会作为血管重建输入。多个序列都可能匹配时，需要核对序列选择。
+- 输入目录必须保持可读，处理过程中不要改动源文件。目录内的符号链接不被接受；单个输入目录最多检查 200,000 个文件。
+- 可以将数据放在 `workspace/`，也可以在对话中明确提供或选择工作区外的**本机绝对路径**。文件夹选择器传递本地路径，不会把整套 DICOM 上传给远程浏览器。运行输出始终写入项目内的 `workspace/vessel-pilot/`。
 
-Agent 的运行过程和工具调用可在 WebUI 的 Trace 中查看。项目启动脚本关闭额外的 `agent.jsonl` 诊断日志；已有 daemon 需要重启后才会采用此设置。
+## 使用方式
 
-下面的 `start_core.bat` 启动的是 MRI2MR 原有 Web UI（端口 8000），与 Agnes Harness 分开运行。
+在 Agnes 新任务中，输入已脱敏 DICOM 病例的 `MR` 文件夹绝对路径，或点击输入框旁的 **Select a DICOM folder** 选择该目录，然后发送明确的任务描述。下方的 `C:\数据集\...` 是示例，请替换为本机实际路径。仅选择文件夹不会自动开始处理。首次处理会要求确认数据已脱敏；有歧义的序列或无法确定的视觉结果也可能要求人工选择。
 
-### 方法一：一键启动（推荐）
+示例提示词：
 
-1. 启动 **Docker Desktop**（SynthSeg 模式需要）。
-2. 双击 `start_core.bat`。
-3. 等待命令行窗口输出 `Uvicorn running on http://127.0.0.1:8000`。
-4. 浏览器自动打开 `http://127.0.0.1:8000/`。
-
-> 若 MATLAB 不在 PATH 中，脚本会自动搜索常见安装位置（`C:\Program Files\MATLAB\R*\`、`D:\Matlab\`），找到后自动设置。
-
-### 方法二：手动启动
-
-```powershell
-# 在 MRI2MR-core 目录下
-& ".\runtime\python\BrainAAL\python.exe" -B -m uvicorn app.backend.main:app --host 127.0.0.1 --port 8000
+```text
+使用 vessel-pilot，检查 C:\数据集\A01\Data_vessel_01\20260208\MR 的 DICOM 序列，不启动转换。
+使用 vessel-pilot，将 C:\数据集\A01\Data_vessel_01\20260208\MR 的已脱敏 DICOM 全部转换为 NIfTI，返回输出路径。
+使用 vessel-pilot，只重建这个病例的动脉，阈值从 850 开始，并比较候选结果。
+使用 vessel-pilot，只重建静脉；只运行一次，不自动调参。
+使用 vessel-pilot，重建这个病例的动脉和静脉，并给出 GLB 路径与质控结论。
 ```
 
----
+任务进度、DICOM/NIfTI 切片预览和 GLB 六视图预览会显示在聊天结果中。静脉重建等长任务可能耗时较久；可在同一会话中查看进度或取消。预览与技术检查通过后，才会将候选定稿；结果仍须由具备相应资质的人员复核。
 
-## 五、Web UI 使用说明
+## 输出目录
 
-打开浏览器访问 `http://127.0.0.1:8000/`，界面分为三大区域：
+每个病例分配独立的 `case_id`，每次重建候选有独立的 `candidate_id`。实际路径以工具返回为准，典型结构如下：
 
-### 1. 病例管理面板（左上）
-
-- **新建病人**：点击"新建病人"按钮，填写姓名、ID、性别、年龄、检查日期、备注。
-- **选择已有病人**：从下拉列表中选择，自动加载其工作区。
-- **保存病人**：将当前填写信息保存到工作区元数据。
-- **刷新病人**：重新扫描 `workspace/` 目录，更新病人列表。
-
-每个病人对应 `workspace/<病人ID或文件夹名>/` 目录，内部结构：
-
-```
-workspace/<病人>/
-├── patient_input/      # 输入文件（T1.nii、MRA.nii、MRV.nii、DTI 等）
-├── SynthSeg_result/    # SynthSeg 分割输出
-├── model_output/       # 模型输出（GLB 文件）
-├── temp/              # 临时文件（DICOM 转换中间结果、缓存等）
-├── logs/              # 该病人任务的日志
-└── previews/          # 预览图
+```text
+workspace/vessel-pilot/<case_id>/
+├── case.json                         # 病例与源数据记录
+├── patient_input/
+│   ├── nifti/*.nii                   # 仅转换任务的输出
+│   ├── MRA.nii                       # 动脉重建输入（如有）
+│   ├── MRV.nii                       # 静脉重建输入（如有）
+│   └── dicom_selection.json          # 序列选择记录
+├── jobs/<job_id>/                    # 任务状态与运行记录
+├── candidates/<candidate_id>/
+│   ├── artery.glb / vein.glb         # 仅包含请求的侧别
+│   ├── parameters.json
+│   ├── report.json                   # 技术与视觉检查
+│   └── previews/                     # 六视图预览
+└── final/<candidate_id>/             # 通过检查后的定稿副本
 ```
 
-### 2. 模式选择与参数面板（中上）
-
-根据选中的病人，显示当前可用的处理模式。每个模式有独立的参数表单，由 `config/modes.json` 驱动。
-
-### 3. 处理进度与结果（右/下）
-
-- 点击 **运行** 按钮提交任务。
-- 任务状态：`pending` → `running` → `success` / `failed` / `cancelled`。
-- 运行完成后，可在结果区域查看：
-  - NIfTI 文件切片预览（可切换轴：X/Y/Z）
-  - GLB 模型 3D 预览（基于 Three.js）
-  - 日志输出
-
----
-
-## 六、处理模式说明
-
-所有模式均在 `config/modes.json` 中定义，通过 Web UI 选择并填写参数后运行。
-
-### 模式 1：DICOM 转换（dicom_convert）
-
-| 项目 | 说明 |
-|------|------|
-| 输入 | DICOM 文件夹（含 T1、MRA、MRV、DTI 序列） |
-| 输出 | `patient_input/T1.nii`、`MRA.nii`、`MRV.nii`、`DTI.nii.gz`、`DTI.bval`、`DTI.bvec` |
-| 关键参数 | `dicom_dir`（DICOM 输入文件夹） |
-| 可选参数 | `dicom_decompress_dcmtk`（5T DTI 或压缩 DICOM 建议启用）、`dti_only`（只处理 DTI） |
-
-**自动识别逻辑**：根据序列名称/协议名中的关键词匹配（T1：`t1/mprage/bravo`；MRA：`mra/tof/angio`；MRV：`mrv/venography`；DTI：`dti/dwi/diffusion`）。关键词可在高级选项中自定义。
-
----
-
-### 模式 2：SynthSeg 分割（synthseg_segmentation）
-
-| 项目 | 说明 |
-|------|------|
-| 输入 | T1 NIfTI 文件（默认 `patient_input/T1.nii`） |
-| 输出 | `SynthSeg_result/T1_synthseg.nii` |
-| 依赖 | Docker 容器 `pwesp/synthseg:py38` |
-| 参数 | `t1_file`、`synthseg_threads`（CPU 线程数，默认 4） |
-
-> SynthSeg 模式需要 **Docker Desktop 已启动**。
-
----
-
-### 模式 3：SPM 分割（spm_segmentation）
-
-| 项目 | 说明 |
-|------|------|
-| 输入 | T1 NIfTI 文件 |
-| 输出 | `patient_input/c1T1.nii`（灰质）、`c2T1.nii`（白质） |
-| 依赖 | MATLAB + SPM12 源码目录 |
-| 参数 | `t1_file` |
-
-SPM 使用 `matlab_cli` 后端，调用 `scripts/run_spm_segmentation.m` 脚本执行组织分割。
-
----
-
-### 模式 4：DK 脑区模型（individual_regions）
-
-| 项目 | 说明 |
-|------|------|
-| 输入 | T1 参考图 + SynthSeg DK 标签图 |
-| 输出 | `model_output/individual_regions/*.glb`（每个 DK 脑区一个 GLB） |
-| 参数 | `dk_file`（默认 `SynthSeg_result/T1_synthseg.nii`）、`dk_name_file`（DK 名称映射表） |
-
-基于 SynthSeg 输出的 DK 分区标签，通过 Marching Cubes 提取每个脑区表面网格，导出为 GLB。
-
----
-
-### 模式 5：灰白质模型（gm_wm）
-
-| 项目 | 说明 |
-|------|------|
-| 输入 | SPM 输出的 `c2T1.nii`（白质）或 `c1T1.nii`（灰质） |
-| 输出 | `model_output/gm_wm/w*.glb` |
-| 参数 | `mask_file`（默认 `c2T1.nii`） |
-
----
-
-### 模式 6：动脉模型（vessel）
-
-| 项目 | 说明 |
-|------|------|
-| 输入 | MRA NIfTI 文件（`MRA.nii`） |
-| 输出 | `model_output/vessel/vessel.glb` |
-| 参数 | `vessel_threshold`（默认 400，越高血管越少）、`vessel_min_object_size`（默认 1000）、`vessel_decimation_fraction`（默认 0.5） |
-
----
-
-### 模式 7：静脉模型（mrv）
-
-| 项目 | 说明 |
-|------|------|
-| 输入 | MRV NIfTI 文件（`MRV.nii`） |
-| 输出 | `model_output/mrv/vessel_vein.glb` |
-| 参数 | `mrv_strong_seed_percentile`（默认 99.9）、`mrv_weak_seed_percentile`（默认 99.8）、`mrv_frangi_sigmas_start/end/step`（Frangi 滤波参数） |
-
-静脉提取使用 Frangi 多尺度滤波 + 区域生长算法。
-
----
-
-### 模式 8：脑叶模型（lobes）
-
-| 项目 | 说明 |
-|------|------|
-| 输入 | T1 + DK 标签图 |
-| 输出 | `model_output/lobes/*.glb`（额叶、颞叶、顶叶、枕叶等） |
-| 参数 | `lobe_map_file`（DK → 脑叶映射表，默认 `template/DK_Lobes.txt`） |
-
----
-
-### 模式 9：脑半球模型（hemispheres）
-
-| 项目 | 说明 |
-|------|------|
-| 输入 | T1 + DK 标签图 |
-| 输出 | `model_output/hemispheres/left.glb`、`right.glb` |
-
----
-
-### 模式 10：脑室模型（ventricle）
-
-| 项目 | 说明 |
-|------|------|
-| 输入 | robust SynthSeg 标签图 |
-| 输出 | `model_output/ventricle/ventricle.glb` |
-
----
-
-### 模式 11：多层 ROI 模型（multiroi）
-
-| 项目 | 说明 |
-|------|------|
-| 输入 | 多层 ROI NIfTI 分割文件 |
-| 输出 | `model_output/multiroi/ROI*.glb` |
-
----
-
-### 模式 12：普通 ROI 模型（roi）
-
-| 项目 | 说明 |
-|------|------|
-| 输入 | 单个 ROI mask NIfTI 文件 |
-| 输出 | `model_output/roi/ROI.glb` |
-
----
-
-### 模式 13：纤维追踪（fiber_tracking）
-
-| 项目 | 说明 |
-|------|------|
-| 输入 | DTI（`DTI.nii.gz` + `DTI.bval` + `DTI.bvec`）+ 白质 mask（`c2T1.nii`） |
-| 输出 | `model_output/fiber_tracking/Fiber_*.glb` |
-| 参数 | `fiber_gfa_threshold`（默认 0.25）、`fiber_stop_threshold`（默认 0.2）、`fiber_step_size`（默认 0.5）、`fiber_max_angle`（默认 45°） |
-
-基于 DIPY 确定性 LocalTracking 算法，在白质 mask 内追踪纤维束。
-
----
-
-### 模式 14：脑区间纤维连接（fiber_tracking_region）
-
-| 项目 | 说明 |
-|------|------|
-| 输入 | DTI + GWI atlas（灰白质交界图）+ 白质 mask |
-| 输出 | `model_output/fiber_tracking_region/*.glb` |
-| 参数 | `gwi_atlas_file`、`fiber_region_min_streamlines`（默认 10，少于该数量不导出） |
-
-GWI atlas 可由 DK 标签图和白质 mask 自动生成（`gwi_dilation_iterations` 控制膨胀次数）。
-
----
-
-### 模式 15：DKI 纤维追踪（fiber_tracking_dki）
-
-| 项目 | 说明 |
-|------|------|
-| 输入 | 多 b 值 DKI 数据（`dki_4d.nii.gz` + `bvals.bval` + `bvecs.bvec`）+ 白质 mask |
-| 输出 | `model_output/fiber_tracking_dki/DKI_MultiShell_Fiber_*.glb`、`dki_parameters/*.nii.gz` |
-
-适用于多 b 值 DKI 数据，使用 CS-DECONV 模型进行纤维追踪并导出参数图。
-
----
-
-## 七、常用参数速查
-
-### 模型生成公共参数（所有 GLB 模式均支持）
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `smoothing_iterations` | 20 | 网格平滑迭代次数 |
-| `smoothing_lambda` | 0.7 | Humphrey 平滑强度 |
-| `marching_cubes_level` | 0.7 | 体素→网格等值面阈值 |
-| `min_object_size` | 14500 | 最小连通区域体素数（过滤噪声） |
-| `mesh_decimation_fraction` | 0.08 | GLB 导出前减面比例 |
-| `num_processes` | 8 | 并行进程数 |
-
-### 血管模型参数
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `vessel_threshold`（MRA） | 400 | MRA 强度阈值，越高血管越少 |
-| `vessel_min_object_size` | 1000 | 过滤小血管 |
-| `vessel_decimation_fraction` | 0.5 | 动脉模型减面比例 |
-
-### 纤维追踪参数
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `fiber_gfa_threshold` | 0.25 | GFA 种子区域阈值 |
-| `fiber_stop_threshold` | 0.2 | 停止条件阈值 |
-| `fiber_step_size` | 0.5 | 每步空间距离（mm） |
-| `fiber_max_angle` | 45.0 | 相邻方向最大转角（°） |
-| `fiber_seed_density` | 1 | 种子密度 |
-| `fiber_radius` | 0.1 | 导出纤维圆柱半径 |
-| `fiber_sections` | 3 | 圆柱截面数 |
-
----
-
-## 八、典型工作流
-
-### 完整流程（从 DICOM 到 3D 模型）
-
-```
-步骤 1: DICOM 转换
-  选择 DICOM 文件夹 → 自动识别 T1/MRA/MRV/DTI → 输出 NIfTI
-
-步骤 2: 组织分割（二选一）
-  a) SynthSeg（需要 Docker）→ 输出 DK 标签图
-  b) SPM（需要 MATLAB）→ 输出灰质/白质 mask
-
-步骤 3: 生成 3D 模型
-  - DK 脑区 → individual_regions 模式
-  - 灰白质 → gm_wm 模式
-  - 动脉 → vessel 模式
-  - 静脉 → mrv 模式
-  - 脑叶 → lobes 模式
-  - 纤维束 → fiber_tracking 模式
-
-步骤 4: 查看结果
-  在 Web UI 中预览 NIfTI 切片和 3D GLB 模型
-```
-
-> 注意：`gm_wm`、`fiber_tracking`、`fiber_tracking_region` 等模式依赖 SPM 输出的白质 mask（`c2T1.nii`），需先运行 SPM 分割。
-
----
-
-## 九、常见问题
-
-**Q：启动后 Web UI 打不开？**
-A：确认 `start_core.bat` 中显示 `Uvicorn running on http://127.0.0.1:8000`，且端口 8000 未被占用。
-
-**Q：SynthSeg 模式报错？**
-A：确认 Docker Desktop 已启动，且 `pwesp/synthseg:py38` 镜像已拉取（首次运行会自动拉取）。
-
-**Q：SPM 模式找不到 MATLAB？**
-A：编辑 `config/app_settings.json`，将 `MATLAB_EXE` 设置为 matlab.exe 的完整路径，例如：
-```json
-"MATLAB_EXE": "C:\\Program Files\\MATLAB\\R2025b\\bin\\matlab.exe"
-```
-
-**Q：DICOM 转换后找不到某个序列？**
-A：Web UI 提供了序列检测结果预览，可查看被排除的原因。必要时在高级选项中调整关键词匹配规则。
-
-**Q：GLB 模型太大/太小？**
-A：调整 `mesh_decimation_fraction`（减面比例，越小越精细）和 `vessel_decimation_fraction`（血管专用）。
-
----
-
-## 十、配置文件说明
-
-### `config/app_settings.json` 关键字段
-
-```json
-{
-  "MAIN_SCRIPT": "scripts\\Main_cmd.py",
-  "SPM_BACKEND": "matlab_cli",
-  "MATLAB_EXE": "C:\\Program Files\\MATLAB\\R2025b\\bin\\matlab.exe",
-  "SYNTHSEG_DOCKER_IMAGE": "pwesp/synthseg:py38",
-  "PYTHON_EXE": "C:\\Users\\admin\\anaconda3\\envs\\BrainAAL\\python.exe",
-  "workspace_root": "workspace",
-  "template_dir": "template",
-  "docker_exe": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
-  "host": "127.0.0.1",
-  "port": 8000,
-  "max_concurrent_jobs": 1
-}
-```
-
-- `max_concurrent_jobs`：最大并发任务数（默认 1，避免资源竞争）。
-- `log_retention_days`：日志保留天数（默认 30 天）。
-
-### `config/modes.json`
-
-定义所有处理模式的参数、默认值和 CLI 映射，Web UI 据此动态渲染表单。一般无需手动修改。
-
----
-
-## 十一、输出文件说明
-
-### GLB 模型文件
-
-- 标准 glTF 二进制格式，可用 Blender、Unity、Three.js 等工具打开。
-- 每个模型独立命名，如 `caudalmiddlefrontal_L.glb`、`vessel.glb`、`Fiber_1.glb`。
-
-### NIfTI 输出
-
-- `T1_synthseg.nii`：SynthSeg DK 标签图（整数标签，对应 `template/DK_Regions.txt` 中的脑区名称）。
-- `c1T1.nii`：SPM 灰质概率图。
-- `c2T1.nii`：SPM 白质概率图。
-
-### 日志
-
-- 每个任务在 `workspace/<病人>/logs/` 下生成日志文件，Web UI 中可实时查看。
-
----
-
-## 十二、免责声明
-
-- 本工具输出（分割结果、模型、纤维追踪）仅供科研参考，不替代临床诊断。
-- 使用前请确认数据符合所在机构伦理审查要求。
+`workspace/` 被 Git 忽略。请不要将原始 DICOM、病例输出、日志或含患者信息的截图提交到公开仓库。实现与故障排查细节见 [VesselPilot 文档](agnes-harness/integrations/vessel-pilot/README.md) 和 [Agnes 文档](agnes-harness/docs/README.zh-CN.md)。

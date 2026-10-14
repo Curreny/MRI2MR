@@ -6,7 +6,7 @@ This integration exposes `scripts/Vascular_cmd.py` to Agnes Harness as a constra
 
 The server discovers the parent `MRI2MR` checkout and uses:
 
-- `runtime/python/BrainAAL/python.exe`, or `venv/runtime/python/BrainAAL/python.exe` in this checkout
+- `runtime/python/BrainAAL/python.exe`, `venv/runtime/python/BrainAAL/python.exe`, or the Python interpreter that starts the MCP server (for example, an activated `BrainAAL` Conda environment)
 - `scripts/Vascular_cmd.py`
 - `dcm2niix_win/dcm2niix.exe`
 - `dcmtk-3.7.0-win64-dynamic/dcmtk-3.7.0-win64-dynamic/bin/dcmdjpeg.exe`
@@ -21,7 +21,17 @@ The default suite checks routing contracts, numeric validation, command construc
 & "..\venv\runtime\python\BrainAAL\python.exe" -B -m unittest integrations\vessel-pilot\test_vessel_pilot.py -v
 ```
 
-## Register in Agnes Harness
+## Start or register in Agnes Harness
+
+For normal use, run `MRI2MR/start_agnes.ps1`. Before starting Agnes, it finds a project-local or Conda `BrainAAL` Python, checks the required Python packages, and creates or updates the `vessel-pilot` MCP definition for the current machine. A new or changed executable still requires the CLI's one-time trust confirmations in the same window. Later starts reuse the reviewed definition without prompting.
+
+To configure and validate VesselPilot without starting the Web service, run:
+
+```powershell
+.\start_agnes.ps1 -SetupOnly
+```
+
+The manual commands below are a recovery and diagnostic path when the startup script cannot be used.
 
 Build or use the existing local Agnes CLI, then register the Python process as a stdio MCP server. Every `--arg` is a separate process argument.
 
@@ -29,7 +39,16 @@ Build or use the existing local Agnes CLI, then register the Python process as a
 $env:AGH_HOME = (Resolve-Path ".\agh-home").Path
 $env:AGNES_PROFILE = "local-dev"
 $agnes = "packages\cli\dist\local\agnes.mjs"
-$python = (Resolve-Path "..\venv\runtime\python\BrainAAL\python.exe").Path
+$pythonCandidates = @(
+  "..\runtime\python\BrainAAL\python.exe"
+  "..\venv\runtime\python\BrainAAL\python.exe"
+)
+if ($env:CONDA_DEFAULT_ENV -eq "BrainAAL" -and $env:CONDA_PREFIX) {
+  $pythonCandidates += Join-Path $env:CONDA_PREFIX "python.exe"
+}
+$python = $pythonCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+if (-not $python) { throw "Activate the BrainAAL Conda environment or set `$python to its python.exe" }
+$python = (Resolve-Path -LiteralPath $python).Path
 $server = (Resolve-Path "integrations\vessel-pilot\server.py").Path
 $inputRoot = (Resolve-Path "..\workspace").Path
 $caseRoot = Join-Path $inputRoot "vessel-pilot"
@@ -57,8 +76,9 @@ node $agnes mcp add vessel-pilot `
 ```
 
 Run these commands from `MRI2MR/agnes-harness` with the same `AGH_HOME` and profile used by WebUI. The current project-local home is `MRI2MR/agnes-harness/agh-home`; using another home creates a separate control plane.
+If `venv` was removed during an environment rebuild, update the existing MCP definition to the new Python executable, then review trust and enable it again. An old executable path remains unavailable even when the Skill is ready.
 
-For normal Web startup, run `MRI2MR/start_agnes.ps1` from the project root. It pins this checkout's home/profile, so they do not need to be typed on each launch.
+The startup script also pins this checkout's home/profile. Use `-SkipVesselPilotSetup` only when intentionally starting Agnes without validating or reconciling this integration.
 
 The canonical local executable is `packages\cli\dist\local\agnes.mjs`. After changing Harness or composer source, rebuild that exact entry before testing:
 

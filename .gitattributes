@@ -1,2 +1,0 @@
-# Keep the bundled portable Python environment out of ordinary Git objects.
-runtime/** filter=lfs diff=lfs merge=lfs -text

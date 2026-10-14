@@ -1,7 +1,16 @@
 # Agnes Harness is currently tracked as part of this repository.
 # Its local runtime and build outputs are ignored by agnes-harness/.gitignore.
 venv/
+.venv/
 mri_reface/
+/runtime/
+
+# Local credentials and machine-specific settings.
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
 
 # Generated patient-study workspace data and packaging output.
 /workspace/
@@ -12,6 +21,9 @@ logs/
 
 # Local editor and Python cache files.
 .vscode/
+.idea/
+.DS_Store
+Thumbs.db
 __pycache__/
 *.py[cod]
 *.log
@@ -20,5 +32,6 @@ __pycache__/
 .ruff_cache/
 .coverage
 *.egg-info/
+*.tsbuildinfo
 
 node_modules/

@@ -45,9 +45,16 @@ class VesselPilotServiceTest(unittest.TestCase):
         result = self.service.inspect_dicom_case(str(dicom), True, "case-test")
         return result["case_id"]
 
-    def test_runtime_discovery_uses_available_portable_python(self) -> None:
+    def test_runtime_discovery_uses_available_python(self) -> None:
         self.assertTrue(self.service.settings.python_exe.is_file())
         self.assertEqual(self.service.settings.python_exe.name, "python.exe")
+        project_root = self.service.settings.project_root
+        portable_paths = (
+            project_root / "runtime" / "python" / "BrainAAL" / "python.exe",
+            project_root / "venv" / "runtime" / "python" / "BrainAAL" / "python.exe",
+        )
+        if not any(path.is_file() for path in portable_paths):
+            self.assertEqual(self.service.settings.python_exe, Path(sys.executable).resolve())
 
     def test_rejects_path_outside_allowlist(self) -> None:
         outside = self.root / "outside"

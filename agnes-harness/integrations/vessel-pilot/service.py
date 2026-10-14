@@ -156,6 +156,10 @@ class Settings:
         portable_python = project_root / "runtime" / "python" / "BrainAAL" / "python.exe"
         if not portable_python.is_file():
             portable_python = project_root / "venv" / "runtime" / "python" / "BrainAAL" / "python.exe"
+        if not portable_python.is_file():
+            # A Conda deployment can launch this server without the bundled runtime.
+            # Use that same interpreter for conversion and reconstruction jobs.
+            portable_python = Path(sys.executable).resolve()
         return cls(
             project_root=project_root,
             case_root=resolved_case_root,
