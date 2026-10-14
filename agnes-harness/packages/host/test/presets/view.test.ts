@@ -41,7 +41,7 @@ describe('toPresetView', () => {
       budget: { preflight: 'count', perRequestCap: 4000, onExceed: 'quote', maxSteps },
       approval: { onTimeout: 'rejected', timeoutMs: 1000, onUnavailable: 'park', pendingTtlMs: 5000 },
       sandbox: { onUnavailable: 'deny' },
-      tools: { timeoutMs: 120000, outputMaxBytes: 32768, timeouts: { shell: 60000 } },
+      tools: { timeoutMs: 120000, outputMaxBytes: 32768, timeouts: { request_user_input: 0, shell: 60000 } },
       verifier: { timeoutMs: 30000, defaultTier: 0 },
       repair: { timeoutMs: 10000 },
       completionGate: { minItems: 3 },
@@ -78,10 +78,8 @@ describe('toPresetView', () => {
     )
   })
   // A recipe that writes 0 means "no deadline". The view reads it as a deadline of zero, and a
-  // timed-out approval is a rejection, so the knob inverts: the recipe that meant "wait" refuses
-  // everything. The `claw` recipe was written that way.
-  it('refuses approval.timeout_ms of 0, which reads as no timeout and behaves as refuse everything', () => {
-    for (const bad of [0, -1, 1.5, '1000', null]) {
+  it('accepts unlimited approval waits and refuses invalid durations', () => {
+    for (const bad of [-1, 1.5, '1000', null]) {
       try {
         toPresetView({ name: 'x', approval: { timeout_ms: bad } })
         expect.unreachable(`expected a refusal for ${JSON.stringify(bad)}`)
@@ -93,7 +91,12 @@ describe('toPresetView', () => {
     }
     expect(toPresetView({ name: 'x', approval: { timeout_ms: 1 } }).approval.timeoutMs).toBe(1)
     // Absent is the way to say "the default", and it stays the default.
-    expect(toPresetView({ name: 'x' }).approval.timeoutMs).toBe(60000)
+    expect(toPresetView({ name: 'x' }).approval.timeoutMs).toBe(0)
+    expect(toPresetView({ name: 'x', approval: { timeout_ms: 0 } }).approval.timeoutMs).toBe(0)
+    expect(
+      toPresetView({ name: 'x', tools: { timeouts: { request_user_input: 0 } } }).tools.timeouts
+        .request_user_input,
+    ).toBe(0)
   })
   it('refuses verifier.default_tier outside 0|1|2 instead of coercing it to 0', () => {
     for (const bad of [3, -1, 1.5, '2', null]) {

@@ -116,6 +116,9 @@
             },
             "timeouts": {
               "type": "object",
+              "properties": {
+                "request_user_input": { "type": "integer", "minimum": 0 }
+              },
               "additionalProperties": {
                 "type": "integer",
                 "minimum": 1000
@@ -304,7 +307,8 @@
             },
             "timeout_ms": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 0,
+              "description": "0 waits for a human answer without a deadline; positive values reject on timeout."
             },
             "pending_ttl_ms": {
               "type": "integer",

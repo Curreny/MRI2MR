@@ -47,6 +47,10 @@ export const appLocaleCatalog: LocaleCatalog = {
     'app.approval.rejectOnce': 'Reject',
     'app.approval.rejectAlways': 'Always reject',
     'app.approval.title': 'Needs your confirmation',
+    'app.approval.inputTitle': 'Choose an option',
+    'app.approval.waitingInput':
+      'The task is waiting for your choice without a time limit. It continues here after you choose.',
+    'app.approval.cancelInput': 'Cancel task',
     'app.notice.oldSessionClosing':
       'The previous session is still closing; the new session is already being prepared.',
     'app.fork.waitIdle': 'Wait for the session to finish running before forking.',
@@ -180,6 +184,9 @@ export const appLocaleCatalog: LocaleCatalog = {
     'app.approval.rejectOnce': '拒绝',
     'app.approval.rejectAlways': '始终拒绝',
     'app.approval.title': '需要你的确认',
+    'app.approval.inputTitle': '请选择',
+    'app.approval.waitingInput': '任务正在等待你的选择，不限时间。选择后会在当前对话中继续。',
+    'app.approval.cancelInput': '取消本次任务',
     'app.notice.oldSessionClosing': '旧会话仍在关闭，新会话已继续准备。',
     'app.fork.waitIdle': '请等待会话运行结束后再分叉。',
     'app.fork.noForkableTurn': '此会话还没有可分叉的已完成回合。',

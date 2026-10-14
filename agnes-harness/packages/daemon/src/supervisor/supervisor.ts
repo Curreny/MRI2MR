@@ -171,6 +171,7 @@ import { coordinateSurfacesOnBoot } from '../surfaces/boot-coordination.js'
 import { createSurfaceController } from '../surfaces/controller.js'
 import { createSurfaceSecretResolver } from '../surfaces/secret-resolver.js'
 import type { SurfaceController } from '../surfaces/types.js'
+import { AgentExecutionLog } from './agent-log.js'
 import {
   artifactMediaReadReply,
   composeDefaultProductionProjectedArtifactRead,
@@ -865,6 +866,12 @@ export async function startSupervisor(o: StartSupervisorOptions): Promise<{
     // The profile is worker input, not a startup marker. Persist it only after the owner lock is
     // held so a competing launch cannot overwrite the profile currently used by another daemon.
     await persistResolvedProfile(o.profileFile, o.profile)
+    const executionLog = new AgentExecutionLog({
+      directory: process.env.AGNES_AGENT_LOG_DIR ?? join(o.config.dataDir, 'logs', 'agent'),
+      level: process.env.AGNES_AGENT_LOG_LEVEL ?? 'info',
+    })
+    startupCleanup.push(() => executionLog.close())
+    executionLog.write('info', 'daemon.start', undefined, { profile: o.profile.name, pid: process.pid })
     if (
       o.artifactAuthorityProjection !== undefined &&
       (o.ports?.artifactRead !== undefined || o.artifactReadAuthority !== undefined)
@@ -1121,11 +1128,20 @@ export async function startSupervisor(o: StartSupervisorOptions): Promise<{
       ...(o.workerExecArgv ? { execArgv: o.workerExecArgv } : {}),
       ...(o.workerEntry ? { workerEntry: o.workerEntry } : {}),
 
-      onEvent: (sessionKey, e) => deliverWorkerEvent(registry, tickets, clock, sessionKey, e, workspaces),
+      onEvent: (sessionKey, e) => {
+        executionLog.event(sessionKey, e)
+        return deliverWorkerEvent(registry, tickets, clock, sessionKey, e, workspaces)
+      },
       onPreview: (sessionKey, p) => registry.deliverPreview(sessionKey, p),
       onResourceStatus: (input) => observeResourceMcpStatus?.(input),
-      onLog: (input) => o.audit?.({ kind: 'worker.log', ...input }),
-      onSessionFailure: (sessionKey, error) => registry.interrupt(sessionKey, error),
+      onLog: (input) => {
+        executionLog.worker(input)
+        o.audit?.({ kind: 'worker.log', ...input })
+      },
+      onSessionFailure: (sessionKey, error) => {
+        executionLog.write('error', 'session.failure', sessionKey, { code: 'E_WORKER_SESSION' })
+        registry.interrupt(sessionKey, error)
+      },
       ...(runtimeDelivery ? { runtimeDelivery } : {}),
       onRequest: async (sessionKey, f) => {
         if (f.method === 'plugin-manage' || f.method === 'plugin-manage-abort')
@@ -2021,6 +2037,8 @@ export async function startSupervisor(o: StartSupervisorOptions): Promise<{
           // A forced worker exit can begin durable turn recovery after the graceful phase timed
           // out. Fence the runtime only after that recovery settles, then release ownership.
           await pool.waitForExitRecovery()
+          executionLog.write('info', 'daemon.stop')
+          await executionLog.close()
           await lock.release()
         },
         log: (message) => console.error(message),

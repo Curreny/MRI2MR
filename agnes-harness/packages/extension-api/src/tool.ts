@@ -170,7 +170,18 @@ export interface CodeRuntime {
   kill(): Promise<void>
 }
 
+export type UserInputRequest = {
+  question: string
+  context?: string
+  options: Array<{ id: string; label: string; description?: string }>
+}
+export type UserInputResult =
+  | { status: 'selected'; optionId: string; label: string }
+  | { status: 'cancelled' | 'unavailable' }
+
 export interface ToolContext {
+  /** Ask the connected human without ending the current turn. Does not grant tool permissions. */
+  requestUserInput?(input: UserInputRequest): Promise<UserInputResult>
   /** Active main-conversation request only; Host owns validation and native approval. */
   readonly mcpManage?: Readonly<{ request(input: unknown): Promise<unknown> }>
   readonly pluginManage?: Readonly<{ request(input: unknown): Promise<unknown> }>

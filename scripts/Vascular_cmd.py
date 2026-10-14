@@ -553,6 +553,16 @@ class DicomConverter:
         return candidate, report
 
     def run(self) -> list[Path]:
+        if "ALL" in self.config.dicom_modalities:
+            if self.config.dicom_modalities != ("ALL",):
+                raise ValueError("ALL cannot be combined with selected modalities")
+            source = self.config.dicom_dir
+            if source is None or not source.is_dir():
+                raise ValueError("--dicom-dir must be an existing directory")
+            if self.config.dicom_decompress_dcmtk:
+                source = self._decompress(source, self.config.dicom_decompress_dir)
+            candidates = self._run_dcm2niix(source, self.config.patient_data_dir / "nifti")
+            return [item["nii"] for item in candidates]
         available_modalities = {
             "T1": (self.config.dicom_t1_source, self.config.dicom_t1_keywords),
             "MRA": (self.config.dicom_mra_source, self.config.dicom_mra_keywords),
@@ -866,9 +876,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--dicom-modalities",
         nargs="+",
         type=str.upper,
-        choices=("T1", "MRA", "MRV"),
+        choices=("T1", "MRA", "MRV", "ALL"),
         default=("T1", "MRA", "MRV"),
-        help="需要转换的血管相关模态；无 T1 时可指定 MRA MRV。",
+        help="选择血管相关模态，或单独指定 ALL 仅转换所有可转换序列，不进行重建序列筛选。",
     )
     dicom.add_argument("--dicom-t1-keywords", nargs="*")
     dicom.add_argument("--dicom-mra-keywords", nargs="*")

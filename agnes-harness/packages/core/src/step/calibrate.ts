@@ -158,7 +158,10 @@ export async function quoteBudget(
     summary,
     risk: 'budget' as const,
     bindingHash: '',
-    deadline: new Date(s.d.clock() + s.preset.approval.timeoutMs).toISOString(),
+    deadline:
+      s.preset.approval.timeoutMs === 0
+        ? ''
+        : new Date(s.d.clock() + s.preset.approval.timeoutMs).toISOString(),
   }
   // Same hook as the tool-approval path in tools.ts, the park path in gate.ts, and the
   // unknown-outcome ask in resume.ts: the payload describes "any request for human approval", not

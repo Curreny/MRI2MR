@@ -297,8 +297,9 @@ describe('web permission synchronization', () => {
     option?.click()
   }
 
-  async function boot(yolo: boolean | undefined) {
+  async function boot(yolo: boolean | undefined, pickerFetch?: typeof fetch) {
     installPublicFixture()
+    if (pickerFetch) vi.stubGlobal('fetch', pickerFetch)
     const timeline = idleTimeline('old')
     timeline.upto = 10
     if (yolo === undefined) delete timeline.yolo
@@ -380,6 +381,70 @@ describe('web permission synchronization', () => {
     }
     return { old, publish, timeline, connect }
   }
+
+  it.each(['selected', 'cancelled', 'failed', 'reconnected'] as const)(
+    'handles DICOM selection (%s) without editing the composer draft',
+    async (outcome) => {
+      const attachment = {
+        type: 'file',
+        mimeType: 'application/vnd.agnes.input+json',
+        name: 'DICOM-1-cases.json',
+        data: 'e30=',
+      }
+      const picked = deferred<Response>()
+      const pickerFetch = vi.fn<typeof fetch>(async (_url, init) =>
+        init?.method === 'POST'
+          ? (await picked.promise).clone()
+          : new Response(JSON.stringify({ available: true })),
+      )
+      const { old, connect } = await boot(false, pickerFetch)
+      const picker = document.getElementById('composer-folders') as HTMLButtonElement
+      await vi.waitFor(() => expect(picker.disabled).toBe(false))
+      const prompt = document.getElementById('prompt') as HTMLTextAreaElement
+      prompt.value = '保留原有草稿'
+      prompt.dispatchEvent(new Event('input', { bubbles: true }))
+      picker.click()
+      if (outcome === 'reconnected') connect('reconnecting')
+      picked.resolve(
+        new Response(
+          JSON.stringify(
+            outcome === 'failed'
+              ? { error: { code: 'DICOM_INPUT_UNREADABLE' } }
+              : outcome === 'cancelled'
+                ? { status: 'cancelled' }
+                : { status: 'selected', attachment },
+          ),
+          { status: outcome === 'failed' ? 422 : 200 },
+        ),
+      )
+      await vi.waitFor(() => expect(picker.textContent).not.toContain('正在'))
+      expect(old.prompt).not.toHaveBeenCalled()
+      expect(old.followUp).not.toHaveBeenCalled()
+      expect(prompt.value).toBe('保留原有草稿')
+      expect(sessionStorage.getItem('agnes-web-composer-draft')).toBe('保留原有草稿')
+      if (outcome === 'selected') {
+        expect(document.body.textContent).toContain(attachment.name)
+        // Repeated selection appends to the draft without starting a turn.
+        picker.click()
+        await vi.waitFor(() => expect(picker.textContent).not.toContain('正在'))
+        expect(old.prompt).not.toHaveBeenCalled()
+        prompt.value = '   '
+        prompt.dispatchEvent(new Event('input', { bubbles: true }))
+        const send = document.getElementById('send') as HTMLButtonElement
+        expect(send.disabled).toBe(true)
+        prompt.value = '只解释转换流程，先不要执行'
+        prompt.dispatchEvent(new Event('input', { bubbles: true }))
+        expect(send.disabled).toBe(false)
+        send.click()
+        await vi.waitFor(() =>
+          expect(old.prompt).toHaveBeenCalledWith(
+            [{ type: 'text', text: '只解释转换流程，先不要执行' }, attachment, attachment],
+            { titleLocale: 'zh-CN' },
+          ),
+        )
+      } else expect(document.body.textContent).not.toContain(attachment.name)
+    },
+  )
 
   it('restores full access on reopening, applies workspace selections, and follows remote patches', async () => {
     const { old, publish } = await boot(false)

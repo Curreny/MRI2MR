@@ -69,7 +69,7 @@ describe('preset matrix through the host resolver', () => {
     expect(approval.command_policy[0]).toMatchObject({ tool: 'edit|write', action: 'allow' })
     // Deep merge, not replacement: claw's own key wins and base's sibling keys survive beside it.
     expect(approval.on_unavailable).toBe('park')
-    expect(approval.timeout_ms).toBe(60000)
+    expect(approval.timeout_ms).toBe(0)
     // Unattended tasks also keep running until completion, cancellation or failure.
     expect(toPresetView(doc).budget.maxSteps).toBeNull()
     expect(toPresetView(doc).depthLimit).toBe(3)
@@ -95,10 +95,21 @@ describe('preset matrix through the host resolver', () => {
       'verifier',
     ])
     expect(doc.tools).toEqual({
-      core: ['read', 'write', 'edit', 'shell', 'grep', 'find', 'ls', 'todo', 'web_fetch'],
+      core: [
+        'read',
+        'write',
+        'edit',
+        'shell',
+        'grep',
+        'find',
+        'ls',
+        'todo',
+        'web_fetch',
+        'request_user_input',
+      ],
       timeout_ms: 120000,
       output_max_bytes: 32768,
-      timeouts: { web_fetch: 30000, skill_helper_import: 240000, shell: 600000 },
+      timeouts: { web_fetch: 30000, skill_helper_import: 240000, shell: 600000, request_user_input: 0 },
     })
   })
 
@@ -112,8 +123,8 @@ describe('preset matrix through the host resolver', () => {
     for (const key of ['checkpoint', 'loop', 'repair', 'recovery', 'ext'])
       expect(r.doc, key).not.toHaveProperty(key)
     expect(toPresetView(r.doc).depthLimit).toBe(1)
-    // The frozen baseline keeps the 120 s every tool had: base's longer shell limit does not leak in.
-    expect(toPresetView(r.doc).tools.timeouts).toEqual({})
+    // The frozen baseline keeps its 120 s shell limit; the human-input tool alone has no deadline.
+    expect(toPresetView(r.doc).tools.timeouts).toEqual({ request_user_input: 0 })
   })
 
   // Hard rule: the frozen baseline may not be extended. A recipe that did would change what the
@@ -126,14 +137,12 @@ describe('preset matrix through the host resolver', () => {
     expect(() => resolvePreset('x', { ...docs, x: { name: 'x', extends: 'standard' } })).not.toThrow()
   })
 
-  // A recipe that writes 0 means "never time out"; the view reads it as a deadline of zero and a
-  // timed-out approval is a rejection, so the knob inverts. Refused at projection.
-  it('refuses an approval timeout of zero, at resolution rather than at the first approval', () => {
+  // Zero deliberately means waiting for the human without a deadline. Negative durations remain invalid.
+  it('accepts an unlimited approval wait and refuses a negative timeout at resolution', () => {
     const zero = { name: 'z', extends: 'standard', approval: { timeout_ms: 0 } }
-    // resolvePreset projects the view as it resolves, so the refusal lands before anything holds the
-    // document - a session never opens on it at all.
-    expect(() => resolvePreset('z', { ...docs, z: zero })).toThrow(/approval\.timeout_ms/)
-    // And every recipe that ships passes the same check, so the refusal is about this document.
+    expect(toPresetView(resolvePreset('z', { ...docs, z: zero }).doc).approval.timeoutMs).toBe(0)
+    const negative = { name: 'n', extends: 'standard', approval: { timeout_ms: -1 } }
+    expect(() => resolvePreset('n', { ...docs, n: negative })).toThrow(/approval\.timeout_ms/)
     for (const name of PRESET_NAMES) expect(() => resolvePreset(name, docs), name).not.toThrow()
   })
 

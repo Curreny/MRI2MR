@@ -16,15 +16,17 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+from parameters import MODALITIES, normalize_parameters, target_vessels
 
 
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-ARTERY_THRESHOLDS = (700.0, 800.0, 900.0)
-VEIN_TOLERANCES = (0.83, 0.85, 0.88)
-VEIN_MIN_SIZES = (800, 1000, 1500)
 TERMINAL_JOB_STATES = {"succeeded", "failed", "cancelled"}
 MAX_JOB_WAIT_SECONDS = 55
 DICOM_SUFFIXES = {".dcm", ".dicom", ".ima"}
+VISUAL_LABELS = {
+    "artery": {"good", "too_dense", "too_sparse", "uncertain"},
+    "vein": {"good", "too_dense", "too_sparse", "scalp_dominant", "intracranial_sparse", "uncertain"},
+}
 
 
 class VesselPilotInputError(ValueError):
@@ -151,12 +153,19 @@ class Settings:
         roots = tuple(path.resolve() for path in input_roots) or (
             (project_root / "workspace").resolve(),
         )
+        portable_python = project_root / "runtime" / "python" / "BrainAAL" / "python.exe"
+        if not portable_python.is_file():
+            portable_python = project_root / "venv" / "runtime" / "python" / "BrainAAL" / "python.exe"
+        if not portable_python.is_file():
+            # A Conda deployment can launch this server without the bundled runtime.
+            # Use that same interpreter for conversion and reconstruction jobs.
+            portable_python = Path(sys.executable).resolve()
         return cls(
             project_root=project_root,
             case_root=resolved_case_root,
             input_roots=roots,
             allow_any_input=allow_any_input,
-            python_exe=project_root / "runtime" / "python" / "BrainAAL" / "python.exe",
+            python_exe=portable_python,
             vascular_script=project_root / "scripts" / "Vascular_cmd.py",
             runner_script=server_file.resolve().with_name("job_runner.py"),
             dcm2niix_exe=project_root / "dcm2niix_win" / "dcm2niix.exe",
@@ -355,11 +364,18 @@ class VesselPilotService:
             "deidentification": manifest["deidentification"],
             "conversion_status": manifest.get("conversion_status", "unknown"),
             "conversion_error": manifest.get("conversion_error"),
+            "conversion_mode": manifest.get("conversion_mode", "vessel"),
+            "nifti_outputs": manifest.get("nifti_outputs", {}),
             "has_mra": has_mra,
             "has_mrv": has_mrv,
             "conversion_ready": manifest.get("conversion_status") == "succeeded"
-            and has_mra
-            and has_mrv,
+            and manifest.get("conversion_mode", "vessel") in MODALITIES
+            and all((case_dir / "patient_input" / f"{name.upper()}.nii").is_file()
+                    for name in MODALITIES.get(manifest.get("conversion_mode", "vessel"), ())),
+            "available_reconstruction_targets": (
+                (["artery"] if has_mra else []) + (["vein"] if has_mrv else [])
+                + (["both"] if has_mra and has_mrv else [])
+            ) if manifest.get("conversion_status") == "succeeded" else [],
             "dicom_selection": read_json(selection_path) if selection_path.is_file() else None,
             "candidates": candidates,
         }
@@ -421,19 +437,21 @@ class VesselPilotService:
         )
         return state
 
-    def start_conversion(self, case_id: str, decompress_with_dcmtk: bool = True) -> dict[str, Any]:
+    def start_conversion(
+        self, case_id: str, decompress_with_dcmtk: bool = True, conversion_mode: str = "vessel"
+    ) -> dict[str, Any]:
+        if conversion_mode not in {"vessel", "nifti", "artery", "vein"}:
+            raise ValueError("conversion_mode must be vessel, nifti, artery or vein")
         with self._conversion_lock:
             case_dir, manifest = self._load_case(case_id)
-            mra = case_dir / "patient_input" / "MRA.nii"
-            mrv = case_dir / "patient_input" / "MRV.nii"
-            if (
-                manifest.get("conversion_status") == "succeeded"
-                and mra.is_file()
-                and mra.stat().st_size > 0
-                and mrv.is_file()
-                and mrv.stat().st_size > 0
-            ):
-                return {"case_id": case_id, "status": "already_succeeded"}
+            previous_mode = manifest.get("conversion_mode", "vessel")
+            if previous_mode == conversion_mode and manifest.get("conversion_status") == "succeeded":
+                outputs = manifest.get("nifti_outputs") or {
+                    name: str(case_dir / "patient_input" / f"{name.upper()}.nii")
+                    for name in MODALITIES.get(conversion_mode, ())
+                }
+                if outputs and all(Path(path).is_file() and Path(path).stat().st_size > 0 for path in outputs.values()):
+                    return {"case_id": case_id, "status": "already_succeeded", "conversion_mode": conversion_mode, "outputs": outputs}
             active_job_id = manifest.get("conversion_job_id")
             if manifest.get("conversion_status") in {"queued", "running"} and isinstance(
                 active_job_id, str
@@ -441,10 +459,16 @@ class VesselPilotService:
                 try:
                     snapshot = self._job_snapshot(active_job_id, case_id)
                     if snapshot.get("status") not in TERMINAL_JOB_STATES:
+                        if previous_mode != conversion_mode:
+                            raise VesselPilotInputError("CONVERSION_ALREADY_RUNNING", "Wait for the active conversion before changing mode")
                         snapshot["already_running"] = True
                         return snapshot
+                except VesselPilotInputError:
+                    raise
                 except ValueError:
                     pass
+            if (case_dir / "candidates").is_dir() and any((case_dir / "candidates").iterdir()):
+                raise ValueError("Conversion inputs are used by existing candidates; register a new case_id to reconvert")
             try:
                 source = Path(manifest["source_path"]).resolve(strict=True)
                 entries = list(source.rglob("*"))
@@ -473,6 +497,9 @@ class VesselPilotService:
                     "input_path changed after inspection; inspect it again before conversion",
                 )
             manifest["conversion_status"] = "queued"
+            manifest["conversion_mode"] = conversion_mode
+            manifest.pop("nifti_outputs", None)
+            manifest.pop("conversion_outputs", None)
             manifest.pop("conversion_error", None)
             atomic_json(case_dir / "case.json", manifest)
             job = self._create_job(
@@ -481,6 +508,7 @@ class VesselPilotService:
                 {
                     "source_path": manifest["source_path"],
                     "decompress_with_dcmtk": decompress_with_dcmtk,
+                    "conversion_mode": conversion_mode,
                 },
             )
             manifest = read_json(case_dir / "case.json")
@@ -492,26 +520,35 @@ class VesselPilotService:
         self,
         case_id: str,
         candidate_id: str,
-        vessel_threshold: float,
-        mrv_weak_grow_tolerance: float,
-        mrv_post_process_min_size: int,
+        vessel_threshold: float | None = None,
+        mrv_weak_grow_tolerance: float | None = None,
+        mrv_post_process_min_size: int | None = None,
+        target: str = "both",
+        parameters: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         candidate_id = validate_id(candidate_id, "candidate_id")
-        if float(vessel_threshold) not in ARTERY_THRESHOLDS:
-            raise ValueError(f"vessel_threshold must be one of {ARTERY_THRESHOLDS}")
-        if float(mrv_weak_grow_tolerance) not in VEIN_TOLERANCES:
-            raise ValueError(f"mrv_weak_grow_tolerance must be one of {VEIN_TOLERANCES}")
-        if int(mrv_post_process_min_size) not in VEIN_MIN_SIZES:
-            raise ValueError(f"mrv_post_process_min_size must be one of {VEIN_MIN_SIZES}")
+        vessels = target_vessels(target)
+        if parameters is not None and not isinstance(parameters, dict):
+            raise ValueError("parameters must be an object")
+        supplied = dict(parameters or {})
+        for name, value in {"vessel_threshold": vessel_threshold, "mrv_weak_grow_tolerance": mrv_weak_grow_tolerance, "mrv_post_process_min_size": mrv_post_process_min_size}.items():
+            if value is not None:
+                if name in supplied and supplied[name] != value:
+                    raise ValueError(f"Conflicting values for {name}")
+                supplied[name] = value
+        parameters = normalize_parameters(target, supplied)
         case_dir, manifest = self._load_case(case_id)
-        inputs = (case_dir / "patient_input" / "MRA.nii", case_dir / "patient_input" / "MRV.nii")
+        modalities = ["mra" if vessel == "artery" else "mrv" for vessel in vessels]
+        inputs = [case_dir / "patient_input" / f"{name.upper()}.nii" for name in modalities]
+        if manifest.get("conversion_mode", "vessel") == "nifti":
+            raise ValueError("NIfTI-only conversion does not select MRA/MRV; first prepare the requested reconstruction inputs")
         if manifest.get("conversion_status") != "succeeded" or any(
             not path.is_file() or path.stat().st_size == 0 for path in inputs
         ):
             raise ValueError("DICOM conversion must succeed before candidate generation")
         recorded_outputs = manifest.get("conversion_outputs")
         if isinstance(recorded_outputs, dict):
-            for name, path in zip(("mra", "mrv"), inputs):
+            for name, path in zip(modalities, inputs):
                 recorded = recorded_outputs.get(name)
                 if (
                     not isinstance(recorded, dict)
@@ -522,19 +559,19 @@ class VesselPilotService:
                         "Converted inputs changed after validation; rerun DICOM conversion"
                     )
         candidate_dir = case_dir / "candidates" / candidate_id
+        for state_path in (case_dir / "jobs").glob("*/state.json"):
+            state = read_json(state_path)
+            if state.get("kind") == "candidate" and state.get("status") not in TERMINAL_JOB_STATES:
+                raise ValueError("A candidate is already running for this case; wait or cancel it before starting another")
         if candidate_dir.exists():
             raise ValueError(f"candidate_id already exists and is immutable: {candidate_id}")
         candidate_dir.mkdir(parents=True, exist_ok=False)
-        parameters = {
-            "vessel_threshold": float(vessel_threshold),
-            "mrv_weak_grow_tolerance": float(mrv_weak_grow_tolerance),
-            "mrv_post_process_min_size": int(mrv_post_process_min_size),
-        }
         atomic_json(candidate_dir / "parameters.json", parameters)
+        atomic_json(candidate_dir / "candidate.json", {"target": target, "requested_parameters": supplied})
         return self._create_job(
             case_id,
             "candidate",
-            {"candidate_id": candidate_id, "parameters": parameters},
+            {"candidate_id": candidate_id, "parameters": parameters, "target": target},
         )
 
     def _find_job_dir(self, job_id: str, case_id: str) -> Path:
@@ -657,6 +694,7 @@ class VesselPilotService:
                 results.append(
                     {
                         "candidate_id": path.name,
+                        "target": self._candidate_target(path),
                         "has_artery": (path / "artery.glb").is_file(),
                         "has_vein": (path / "vein.glb").is_file(),
                         "parameters": read_json(path / "parameters.json")
@@ -666,6 +704,13 @@ class VesselPilotService:
                     }
                 )
         return {"case_id": case_id, "candidates": results}
+
+    @staticmethod
+    def _candidate_target(candidate_dir: Path) -> str:
+        path = candidate_dir / "candidate.json"
+        target = read_json(path).get("target", "both") if path.is_file() else "both"
+        target_vessels(target)
+        return target
 
     def _mesh_metrics(self, path: Path, preview_dir: Path, color: tuple[int, int, int]) -> dict[str, Any]:
         import numpy as np
@@ -802,26 +847,35 @@ class VesselPilotService:
             montage.paste(preview, (x, y))
         montage.quantize(colors=128).save(output / "montage.png", optimize=True)
 
-    def evaluate_candidate(self, case_id: str, candidate_id: str) -> dict[str, Any]:
+    def evaluate_candidate(
+        self, case_id: str, candidate_id: str,
+        assessments: dict[str, dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        if assessments is not None:
+            return self.record_visual_assessment(case_id, candidate_id, assessments)
         candidate_id = validate_id(candidate_id, "candidate_id")
         case_dir, manifest = self._load_case(case_id)
         candidate_dir = case_dir / "candidates" / candidate_id
+        target = self._candidate_target(candidate_dir)
+        vessels = target_vessels(target)
         artery = candidate_dir / "artery.glb"
         vein = candidate_dir / "vein.glb"
-        if not artery.is_file() or not vein.is_file():
-            raise ValueError("Candidate must contain both artery.glb and vein.glb")
+        if any(not (candidate_dir / f"{name}.glb").is_file() for name in vessels):
+            raise ValueError(f"Candidate must contain the requested outputs: {', '.join(vessels)}")
         errors: list[str] = []
         metrics: dict[str, Any] = {}
         for name, path, color in (
             ("artery", artery, (205, 40, 40)),
             ("vein", vein, (40, 85, 205)),
         ):
+            if name not in vessels:
+                continue
             try:
                 metrics[name] = self._mesh_metrics(path, candidate_dir / "previews" / name, color)
             except Exception as exc:
                 errors.append(f"{name}: {exc}")
         vein_distribution_proxy: dict[str, Any] | None = None
-        if not errors:
+        if not errors and target == "both":
             try:
                 vein_distribution_proxy = self._vein_distribution_proxy(artery, vein)
             except Exception as exc:
@@ -839,126 +893,146 @@ class VesselPilotService:
                 violations.append(f"{name}: vertex count exceeds limit")
             if item["faces"] > limits["max_faces"]:
                 violations.append(f"{name}: face count exceeds limit")
-        conclusion = "fail" if violations else "pass"
+        technical_conclusion = "fail" if violations else "pass"
+        preview_montages = {
+            name: str(candidate_dir / "previews" / name / "montage.png") for name in metrics
+        }
+        mesh_hashes = {name: item["sha256"] for name, item in metrics.items()}
+        preview_hashes = {
+            name: sha256_file(Path(path)) for name, path in preview_montages.items()
+        }
+        previous_report_path = candidate_dir / "report.json"
+        try:
+            previous = read_json(previous_report_path) if previous_report_path.is_file() else {}
+        except (OSError, ValueError):
+            previous = {}
+        previous_visual = previous.get("visual_assessment")
+        if not isinstance(previous_visual, dict) or (
+            previous_visual.get("mesh_sha256") != mesh_hashes
+            or previous_visual.get("preview_sha256") != preview_hashes
+        ):
+            previous_visual = None
+        visual_conclusion = previous_visual.get("conclusion") if previous_visual else "pending"
+        conclusion = "fail" if technical_conclusion == "fail" else (
+            visual_conclusion if visual_conclusion != "pending" else "review"
+        )
         report = {
             "schema_version": 1,
             "case_id": case_id,
             "candidate_id": candidate_id,
+            "target": target,
             "created_at": utc_now(),
             "input_fingerprint": manifest["input_fingerprint"],
             "parameters": read_json(candidate_dir / "parameters.json"),
-            "quality_scope": "technical_mesh_qc_v1",
+            "quality_scope": "technical_mesh_and_visual_qc_v2",
             "clinical_quality_review_required": True,
             "limits": limits,
             "metrics": metrics,
             "vein_distribution_proxy": vein_distribution_proxy,
+            "vein_distribution_proxy_unavailable_reason": None if target == "both" else "Requires both artery and vein meshes; not computed for a single-vessel task",
             "violations": violations,
+            "technical_conclusion": technical_conclusion,
+            "visual_assessment": previous_visual,
+            "visual_conclusion": visual_conclusion,
             "conclusion": conclusion,
             "preview_root": str(candidate_dir / "previews"),
-            "preview_montages": {
-                "artery": str(candidate_dir / "previews" / "artery" / "montage.png"),
-                "vein": str(candidate_dir / "previews" / "vein" / "montage.png"),
-            },
+            "preview_montages": preview_montages,
+            "preview_sha256": preview_hashes,
         }
         atomic_json(candidate_dir / "report.json", report)
+        return report
+
+    def record_visual_assessment(
+        self, case_id: str, candidate_id: str, assessments: dict[str, dict[str, str]]
+    ) -> dict[str, Any]:
+        candidate_id = validate_id(candidate_id, "candidate_id")
+        case_dir, _ = self._load_case(case_id)
+        candidate_dir = case_dir / "candidates" / candidate_id
+        report_path = candidate_dir / "report.json"
+        if not report_path.is_file():
+            raise ValueError("Evaluate the candidate before recording visual assessment")
+        report = read_json(report_path)
+        vessels = target_vessels(self._candidate_target(candidate_dir))
+        if not isinstance(assessments, dict) or set(assessments) != set(vessels):
+            raise ValueError("Visual assessments must cover exactly the candidate's requested vessels")
+        validated = {}
+        for vessel in vessels:
+            item = assessments[vessel]
+            if not isinstance(item, dict) or set(item) != {"label", "reason"}:
+                raise ValueError(f"{vessel} visual assessment requires label and reason")
+            label, reason = item["label"], item["reason"]
+            if label not in VISUAL_LABELS[vessel]:
+                raise ValueError(f"Invalid {vessel} visual assessment label")
+            if not isinstance(reason, str) or not 8 <= len(reason.strip()) <= 2000:
+                raise ValueError(f"{vessel} visual assessment reason must be 8-2000 characters")
+            validated[vessel] = {"label": label, "reason": reason.strip()}
+        mesh_hashes = report.get("metrics", {})
+        if set(mesh_hashes) != set(vessels):
+            raise ValueError("Candidate technical metrics are incomplete; evaluate it again")
+        mesh_hashes = {name: mesh_hashes[name]["sha256"] for name in vessels}
+        for vessel in vessels:
+            if sha256_file(candidate_dir / f"{vessel}.glb") != mesh_hashes[vessel]:
+                raise ValueError("Candidate changed after evaluation; evaluate it again")
+        preview_hashes = {}
+        for vessel in vessels:
+            path = Path(report["preview_montages"][vessel])
+            if not path.is_file():
+                raise ValueError("Candidate preview is missing; evaluate it again")
+            preview_hashes[vessel] = sha256_file(path)
+            if preview_hashes[vessel] != report.get("preview_sha256", {}).get(vessel):
+                raise ValueError("Candidate preview changed after evaluation; evaluate it again")
+        labels = {item["label"] for item in validated.values()}
+        visual_conclusion = "review" if "uncertain" in labels else (
+            "pass" if labels == {"good"} else "fail"
+        )
+        report["visual_assessment"] = {
+            "source": "agent_reported",
+            "recorded_at": utc_now(),
+            "vessels": validated,
+            "mesh_sha256": mesh_hashes,
+            "preview_sha256": preview_hashes,
+            "conclusion": visual_conclusion,
+        }
+        report["visual_conclusion"] = visual_conclusion
+        report["conclusion"] = (
+            "fail" if report.get("technical_conclusion") == "fail" else visual_conclusion
+        )
+        atomic_json(report_path, report)
         return report
 
     def suggest_parameters(
         self,
         case_id: str,
         based_on_candidate_id: str,
-        artery_assessment: str,
-        vein_assessment: str,
+        artery_assessment: str | None = None,
+        vein_assessment: str | None = None,
+        search_space: dict[str, list[Any]] | None = None,
+        locked_parameters: list[str] | None = None,
+        max_candidates: int = 6,
     ) -> dict[str, Any]:
-        """Turn a visual assessment into one safe, untried, one-parameter change."""
+        from tuning import recommend
+
         based_on_candidate_id = validate_id(based_on_candidate_id, "based_on_candidate_id")
-        artery_allowed = {"good", "too_dense", "too_sparse", "uncertain"}
-        vein_allowed = artery_allowed | {"scalp_dominant", "intracranial_sparse"}
-        if artery_assessment not in artery_allowed or vein_assessment not in vein_allowed:
-            raise ValueError(
-                f"artery_assessment must be one of {sorted(artery_allowed)}; "
-                f"vein_assessment must be one of {sorted(vein_allowed)}"
-            )
         case_dir, _ = self._load_case(case_id)
         candidate_dir = case_dir / "candidates" / based_on_candidate_id
-        parameters_path = candidate_dir / "parameters.json"
-        report_path = candidate_dir / "report.json"
-        if not parameters_path.is_file() or not report_path.is_file():
+        if not (candidate_dir / "parameters.json").is_file() or not (candidate_dir / "report.json").is_file():
             raise ValueError("The base candidate must be reconstructed and evaluated first")
-        base = read_json(parameters_path)
-        tried: set[tuple[float, float, int]] = set()
-        candidates_root = case_dir / "candidates"
-        for path in candidates_root.iterdir() if candidates_root.is_dir() else ():
+        target = self._candidate_target(candidate_dir)
+        visual = read_json(candidate_dir / "report.json").get("visual_assessment")
+        if isinstance(visual, dict):
+            recorded = visual.get("vessels", {})
+            submitted = {"artery": artery_assessment, "vein": vein_assessment}
+            if any(submitted[name] != recorded.get(name, {}).get("label") for name in target_vessels(target)):
+                raise ValueError("Parameter suggestion assessments must match the recorded visual QC")
+        base = read_json(candidate_dir / "parameters.json")
+        tried = []
+        for path in (case_dir / "candidates").iterdir():
             item = path / "parameters.json"
-            if not item.is_file():
-                continue
-            value = read_json(item)
-            tried.add(
-                (
-                    float(value["vessel_threshold"]),
-                    float(value["mrv_weak_grow_tolerance"]),
-                    int(value["mrv_post_process_min_size"]),
-                )
-            )
-
-        base_tuple = (
-            float(base["vessel_threshold"]),
-            float(base["mrv_weak_grow_tolerance"]),
-            int(base["mrv_post_process_min_size"]),
-        )
-        proposals: list[tuple[tuple[float, float, int], str]] = []
-
-        def directional(values: tuple[Any, ...], current: Any, direction: int) -> list[Any]:
-            index = values.index(current)
-            indices = range(index + direction, len(values), direction) if direction > 0 else range(index - 1, -1, -1)
-            return [values[position] for position in indices]
-
-        if artery_assessment in {"too_dense", "too_sparse"}:
-            direction = 1 if artery_assessment == "too_dense" else -1
-            reason = "reduce artery density/noise" if direction > 0 else "recover missing artery branches"
-            for value in directional(ARTERY_THRESHOLDS, base_tuple[0], direction):
-                proposals.append(((value, base_tuple[1], base_tuple[2]), reason))
-        if vein_assessment in {
-            "too_dense",
-            "too_sparse",
-            "scalp_dominant",
-            "intracranial_sparse",
-        }:
-            direction = 1 if vein_assessment in {"too_dense", "scalp_dominant"} else -1
-            if vein_assessment == "scalp_dominant":
-                reason = "reduce scalp/peripheral vein proxy while preserving intracranial branches"
-            elif vein_assessment == "intracranial_sparse":
-                reason = "recover intracranial vein branches"
-            else:
-                reason = "reduce vein density/noise" if direction > 0 else "recover missing vein branches"
-            for value in directional(VEIN_TOLERANCES, base_tuple[1], direction):
-                proposals.append(((base_tuple[0], value, base_tuple[2]), reason))
-            for value in directional(VEIN_MIN_SIZES, base_tuple[2], direction):
-                proposals.append(((base_tuple[0], base_tuple[1], value), reason))
-
-        for proposal, reason in proposals:
-            if proposal not in tried:
-                parameters = {
-                    "vessel_threshold": proposal[0],
-                    "mrv_weak_grow_tolerance": proposal[1],
-                    "mrv_post_process_min_size": proposal[2],
-                }
-                return {
-                    "status": "recommended",
-                    "based_on_candidate_id": based_on_candidate_id,
-                    "parameters": parameters,
-                    "reason": reason,
-                    "changed_parameter_count": sum(a != b for a, b in zip(base_tuple, proposal)),
-                    "candidate_id_suggestion": (
-                        f"auto-a{int(proposal[0])}-t{str(proposal[1]).replace('.', '')}-s{proposal[2]}"
-                    ),
-                }
-        if artery_assessment == "good" and vein_assessment == "good":
-            return {"status": "no_change", "reason": "Both vessel previews were assessed as good."}
-        return {
-            "status": "needs_human_review",
-            "reason": "No safe untried one-parameter change remains, or the visual assessment is uncertain.",
-        }
+            if item.is_file() and self._candidate_target(path) == target:
+                tried.append(normalize_parameters(target, read_json(item)))
+        result = recommend(target, base, tried, artery_assessment, vein_assessment,
+                           search_space, locked_parameters, max_candidates)
+        return {"based_on_candidate_id": based_on_candidate_id, "target": target, **result}
 
     def finalize_case(self, case_id: str, candidate_id: str) -> dict[str, Any]:
         candidate_id = validate_id(candidate_id, "candidate_id")
@@ -968,12 +1042,22 @@ class VesselPilotService:
         if not report_path.is_file():
             raise ValueError("Candidate must be evaluated before finalization")
         report = read_json(report_path)
-        if report.get("conclusion") != "pass":
-            raise ValueError("Only a candidate with conclusion=pass can be finalized")
+        if report.get("technical_conclusion") != "pass" or report.get("visual_conclusion") != "pass" or report.get("conclusion") != "pass":
+            raise ValueError("Only a candidate with passing technical and visual QC can be finalized")
+        target = self._candidate_target(candidate_dir)
+        vessels = target_vessels(target)
+        for name in vessels:
+            path = candidate_dir / f"{name}.glb"
+            if not path.is_file() or sha256_file(path) != report.get("metrics", {}).get(name, {}).get("sha256"):
+                raise ValueError("Candidate changed after evaluation; evaluate it again before finalization")
+            preview = Path(report.get("preview_montages", {}).get(name, ""))
+            visual = report.get("visual_assessment") or {}
+            if not preview.is_file() or sha256_file(preview) != visual.get("preview_sha256", {}).get(name):
+                raise ValueError("Candidate preview changed after visual assessment; evaluate it again")
         final_dir = case_dir / "final" / candidate_id
         if not final_dir.exists():
             final_dir.mkdir(parents=True, exist_ok=False)
-            for name in ("artery.glb", "vein.glb", "parameters.json", "report.json"):
+            for name in (*[f"{vessel}.glb" for vessel in vessels], "parameters.json", "report.json"):
                 shutil.copy2(candidate_dir / name, final_dir / name)
             if (candidate_dir / "previews").is_dir():
                 shutil.copytree(candidate_dir / "previews", final_dir / "previews")
@@ -981,20 +1065,22 @@ class VesselPilotService:
             "schema_version": 1,
             "case_id": case_id,
             "candidate_id": candidate_id,
+            "target": target,
             "created_at": utc_now(),
             "input_fingerprint": manifest["input_fingerprint"],
             "parameters": report["parameters"],
             "quality_scope": report["quality_scope"],
+            "technical_conclusion": report["technical_conclusion"],
+            "visual_assessment": report["visual_assessment"],
+            "visual_conclusion": report["visual_conclusion"],
             "clinical_quality_review_required": True,
             "artifacts": {
-                "artery_glb": str(final_dir / "artery.glb"),
-                "vein_glb": str(final_dir / "vein.glb"),
+                **{f"{vessel}_glb": str(final_dir / f"{vessel}.glb") for vessel in vessels},
                 "report": str(final_dir / "report.json"),
                 "previews": str(final_dir / "previews"),
             },
             "checksums": {
-                "artery_glb": sha256_file(final_dir / "artery.glb"),
-                "vein_glb": sha256_file(final_dir / "vein.glb"),
+                f"{vessel}_glb": sha256_file(final_dir / f"{vessel}.glb") for vessel in vessels
             },
         }
         atomic_json(case_dir / "final" / "manifest.json", final_manifest)

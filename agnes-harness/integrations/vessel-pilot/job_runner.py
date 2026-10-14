@@ -15,6 +15,7 @@ from typing import Any
 
 import nibabel as nib
 import numpy as np
+from parameters import MODALITIES, normalize_parameters, parameter_names, target_vessels
 
 
 class PipelineFailure(RuntimeError):
@@ -68,10 +69,41 @@ def clear_conversion_outputs(case_dir: Path) -> None:
         (patient_input / stale_name).unlink(missing_ok=True)
 
 
-def conversion_result(case_dir: Path) -> dict[str, Any]:
+def conversion_result(case_dir: Path, conversion_mode: str = "vessel") -> dict[str, Any]:
+    if conversion_mode == "nifti":
+        outputs = sorted((case_dir / "patient_input" / "nifti").glob("*.nii"))
+        if not outputs:
+            raise PipelineFailure("NO_NIFTI_OUTPUT", "No NIfTI series were produced")
+        artifacts: dict[str, Any] = {}
+        validation: dict[str, Any] = {}
+        for path in outputs:
+            try:
+                image = nib.load(str(path))
+                shape = [int(value) for value in image.shape]
+                zooms = [float(value) for value in image.header.get_zooms()]
+                if len(shape) < 2 or any(value < 1 for value in shape):
+                    raise ValueError(f"invalid image shape: {shape}")
+                if not np.isfinite(image.affine).all() or any(
+                    not np.isfinite(value) or value <= 0 for value in zooms
+                ):
+                    raise ValueError("invalid affine or voxel sizes")
+                # Force a payload read so a truncated file is not reported as a successful conversion.
+                np.asanyarray(image.dataobj)
+                validation[path.name] = {"shape": shape, "voxel_size": zooms}
+                artifacts[path.name] = {"path": str(path), "size": path.stat().st_size, "sha256": hash_file(path)}
+            except Exception as exc:
+                raise PipelineFailure("INVALID_CONVERTED_NIFTI", str(exc), {"path": str(path)}) from exc
+        return {
+            "conversion_mode": "nifti",
+            "outputs": {path.name: str(path) for path in outputs},
+            "artifacts": artifacts,
+            "validation": validation,
+        }
+    if conversion_mode not in MODALITIES:
+        raise ValueError("Unsupported conversion mode")
     outputs = {
-        "mra": case_dir / "patient_input" / "MRA.nii",
-        "mrv": case_dir / "patient_input" / "MRV.nii",
+        name: case_dir / "patient_input" / f"{name.upper()}.nii"
+        for name in MODALITIES[conversion_mode]
     }
     available = [
         name for name, path in outputs.items() if path.is_file() and path.stat().st_size > 0
@@ -89,9 +121,9 @@ def conversion_result(case_dir: Path) -> dict[str, Any]:
     if missing:
         raise PipelineFailure(
             "MISSING_REQUIRED_MODALITY",
-            "Conversion requires both MRA and MRV; missing: " + ", ".join(missing),
+            "Conversion is missing required modalities: " + ", ".join(missing),
             {
-                "required_modalities": ["mra", "mrv"],
+                "required_modalities": list(outputs),
                 "available_modalities": available,
                 "missing_modalities": missing,
                 "selection_report": str(selection_path) if selection_path.is_file() else None,
@@ -154,6 +186,34 @@ def conversion_result(case_dir: Path) -> dict[str, Any]:
     }
 
 
+def candidate_commands(spec: dict[str, Any]) -> list[tuple[str, list[str], Path]]:
+    """Build only the requested stages; paths always come from the controlled case directory."""
+    case_dir = Path(spec["case_dir"])
+    payload = spec["payload"]
+    target = payload.get("target", "both")
+    parameters = normalize_parameters(target, payload["parameters"])
+    candidate_dir = case_dir / "candidates" / payload["candidate_id"]
+    commands = []
+    for vessel in target_vessels(target):
+        output = candidate_dir / f"{vessel}.glb"
+        # A vein-only task uses MRV as its spatial reference, so it does not need MRA or T1.
+        reference = case_dir / "patient_input" / ("MRV.nii" if target == "vein" else "MRA.nii")
+        command = [spec["python_exe"], spec["vascular_script"], "--mode", vessel,
+                   "--base-data-dir", str(case_dir), "--reference-file", str(reference),
+                   f"--{vessel}-output-file", str(output)]
+        for name, value in parameters.items():
+            if name in parameter_names(vessel):
+                command.extend(["--" + name.replace("_", "-"), str(value)])
+        if vessel == "vein":
+            mrv = case_dir / "patient_input" / "MRV.nii"
+            signature = {"source": hash_file(mrv), **{key: value for key, value in parameters.items() if key.startswith("mrv_frangi_sigmas_")}}
+            cache_key = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()[:20]
+            cache = case_dir / "temp" / f"frangi_{cache_key}.nii"
+            command.extend(["--mrv-frangi-cache-file", str(cache)])
+        commands.append((f"{vessel}_reconstruction", command, output))
+    return commands
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--spec", required=True)
@@ -178,6 +238,7 @@ def main() -> int:
         payload = spec["payload"]
         if spec["kind"] == "conversion":
             set_phase("dicom_conversion")
+            conversion_mode = payload.get("conversion_mode", "vessel")
             clear_conversion_outputs(case_dir)
             case_manifest_path = case_dir / "case.json"
             case_manifest = json.loads(case_manifest_path.read_text(encoding="utf-8"))
@@ -192,8 +253,7 @@ def main() -> int:
                 "--dicom-dir",
                 payload["source_path"],
                 "--dicom-modalities",
-                "MRA",
-                "MRV",
+                *(["ALL"] if conversion_mode == "nifti" else [name.upper() for name in MODALITIES[conversion_mode]]),
                 "--base-data-dir",
                 str(case_dir),
                 "--dcm2niix-exe",
@@ -211,66 +271,22 @@ def main() -> int:
                     str(exc),
                     {**exc.details, "command_log": str(log_path)},
                 ) from exc
-            result = conversion_result(case_dir)
+            result = conversion_result(case_dir, conversion_mode)
             case_manifest = json.loads(case_manifest_path.read_text(encoding="utf-8"))
             case_manifest["conversion_status"] = "succeeded"
             case_manifest["converted_at"] = now()
             case_manifest["conversion_outputs"] = result["artifacts"]
+            case_manifest["nifti_outputs"] = result["outputs"]
             case_manifest.pop("conversion_error", None)
             atomic_json(case_manifest_path, case_manifest)
         elif spec["kind"] == "candidate":
-            candidate_id = payload["candidate_id"]
-            parameters = payload["parameters"]
-            candidate_dir = case_dir / "candidates" / candidate_id
-            artery = candidate_dir / "artery.glb"
-            vein = candidate_dir / "vein.glb"
-            mrv = case_dir / "patient_input" / "MRV.nii"
-            cache_key = hash_file(mrv)[:16]
-            cache = case_dir / "temp" / f"frangi_{cache_key}.nii"
-            set_phase("artery_reconstruction")
-            run_command(
-                [
-                    python,
-                    script,
-                    "--mode",
-                    "artery",
-                    "--base-data-dir",
-                    str(case_dir),
-                    "--reference-modality",
-                    "auto",
-                    "--vessel-threshold",
-                    str(parameters["vessel_threshold"]),
-                    "--artery-output-file",
-                    str(artery),
-                ],
-                log_path,
-            )
-            set_phase("vein_reconstruction")
-            run_command(
-                [
-                    python,
-                    script,
-                    "--mode",
-                    "vein",
-                    "--base-data-dir",
-                    str(case_dir),
-                    "--reference-modality",
-                    "auto",
-                    "--mrv-frangi-cache-file",
-                    str(cache),
-                    "--mrv-weak-grow-tolerance",
-                    str(parameters["mrv_weak_grow_tolerance"]),
-                    "--mrv-post-process-min-size",
-                    str(parameters["mrv_post_process_min_size"]),
-                    "--vein-output-file",
-                    str(vein),
-                ],
-                log_path,
-            )
-            missing = [path.name for path in (artery, vein) if not path.is_file() or path.stat().st_size == 0]
-            if missing:
-                raise RuntimeError(f"Candidate did not produce valid GLB files: {', '.join(missing)}")
-            result = {"candidate_id": candidate_id, "artery_glb": str(artery), "vein_glb": str(vein)}
+            result = {"candidate_id": payload["candidate_id"], "target": payload.get("target", "both")}
+            for phase, command, output in candidate_commands(spec):
+                set_phase(phase)
+                run_command(command, log_path)
+                if not output.is_file() or output.stat().st_size == 0:
+                    raise RuntimeError(f"Candidate did not produce a non-empty GLB: {output.name}")
+                result[f"{output.stem}_glb"] = str(output)
         else:
             raise ValueError(f"Unsupported job kind: {spec['kind']}")
         state.update({"status": "succeeded", "phase": "complete", "finished_at": now(), "result": result})

@@ -130,6 +130,46 @@ export function buildToolContext(
   const stepId = `${d.turn}/${d.step}`
   const publicFetch = d.publicFetch
   return {
+    ...(call.name === 'request_user_input'
+      ? {
+          requestUserInput: async (input: import('@agnes/extension-api').UserInputRequest) => {
+            const ids = new Set(input.options.map((option) => option.id))
+            if (
+              !input.question.trim() ||
+              input.options.length < 2 ||
+              input.options.length > 8 ||
+              ids.size !== input.options.length ||
+              input.options.some((option) => !option.id || !option.label.trim())
+            )
+              throw new TypeError('human input needs a question and 2–8 uniquely identified options')
+            const answer = await d.runtime.approvalAsk(
+              {
+                requestId: `input:${call.toolUseId}`,
+                kind: 'input',
+                input: structuredClone(input),
+                sessionKey: d.sessionKey,
+                stepId,
+                toolUseId: call.toolUseId,
+                summary: input.question,
+                risk: 'always',
+                actor: d.actor,
+                taint: false,
+                bindingHash: '',
+                deadline: '',
+                scope: d.sessionKey,
+              },
+              call.signal,
+            )
+            if (typeof answer === 'object' && 'verdict' in answer) {
+              const option = input.options.find((item) => item.id === answer.selectionId)
+              if (answer.verdict === 'allowed-once' && option)
+                return { status: 'selected', optionId: option.id, label: option.label }
+              if (answer.verdict === 'unavailable') return { status: 'unavailable' }
+            }
+            return { status: 'cancelled' }
+          },
+        }
+      : {}),
     session: {
       key: d.sessionKey,
       lane: d.lane,

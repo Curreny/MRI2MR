@@ -1,0 +1,49 @@
+{
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "question": {
+      "minLength": 1,
+      "maxLength": 2000,
+      "type": "string"
+    },
+    "context": {
+      "maxLength": 16000,
+      "type": "string"
+    },
+    "options": {
+      "minItems": 2,
+      "maxItems": 8,
+      "type": "array",
+      "items": {
+        "additionalProperties": false,
+        "type": "object",
+        "properties": {
+          "id": {
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "type": "string"
+          },
+          "label": {
+            "minLength": 1,
+            "maxLength": 200,
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 1000,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ]
+      }
+    }
+  },
+  "required": [
+    "question",
+    "options"
+  ]
+}

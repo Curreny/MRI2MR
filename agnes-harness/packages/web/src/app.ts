@@ -625,7 +625,8 @@ function renderControls(): void {
   const available = connected
   const busy = projection ? webView(projection, undefined, t).busy : false
   const images = composerRuntime.getAttachmentBlocks()
-  const hasInput = composerRuntime.getDraft().trim().length > 0 || images.length > 0
+  const requiresPrompt = images.some((block) => block.mimeType === 'application/vnd.agnes.input+json')
+  const hasInput = composerRuntime.getDraft().trim().length > 0 || (!requiresPrompt && images.length > 0)
   const initialSubmissionPending = sending && pendingSessionKey !== undefined
   const action = composerActionPresentation({ busy, loading: sessionPending, sending }, t)
   for (const control of notice.querySelectorAll<HTMLButtonElement>('[data-recovery-action]'))
@@ -648,6 +649,10 @@ function renderControls(): void {
         (!current && !draftingNew) ||
         stopping ||
         sessionPending ||
+        sending ||
+        permissionChangePending ||
+        permissionUnknown ||
+        !selectedModelAvailable() ||
         initialSubmissionPending,
       pending: multiFolderPickerBusy,
     },
@@ -678,17 +683,19 @@ function renderControls(): void {
         ? { kind: 'state', text: t('composer.hint.modelUnavailable') }
         : imageUnsupported
           ? { kind: 'state', text: t('composer.hint.imageUnsupported') }
-          : composerHintPresentation(
-              {
-                connected,
-                configured,
-                hasSession: current !== undefined || draftingNew,
-                busy,
-                stopping,
-                loading: sessionPending,
-              },
-              t,
-            ),
+          : requiresPrompt && !composerRuntime.getDraft().trim()
+            ? { kind: 'state', text: t('composer.folder.promptRequired') }
+            : composerHintPresentation(
+                {
+                  connected,
+                  configured,
+                  hasSession: current !== undefined || draftingNew,
+                  busy,
+                  stopping,
+                  loading: sessionPending,
+                },
+                t,
+              ),
     input: {
       disabled:
         !available || (!current && !draftingNew) || stopping || sessionPending || initialSubmissionPending,
@@ -770,6 +777,7 @@ function renderControls(): void {
         !selectedModelAvailable() ||
         (!current && !canStartDraft) ||
         !hasInput ||
+        multiFolderPickerBusy ||
         composerRuntime.hasPendingImages() ||
         Boolean(imageUnsupported) ||
         sending ||
@@ -992,6 +1000,14 @@ function renderApproval(): void {
       ...(card?.sessionLabel === undefined ? {} : { allow_always: card.sessionLabel }),
     }
     for (const option of request.request.options) {
+      if (card?.input) {
+        decide(
+          `live:${option.optionId}`,
+          option.optionId === 'input-cancel' ? t('app.approval.cancelInput') : option.name,
+          async () => request.finish({ optionId: option.optionId }),
+        )
+        continue
+      }
       if (option.name === 'allow_always' && labels.allow_always === undefined) continue
       decide(`live:${option.name}`, labels[option.name] ?? option.name, async () =>
         request.finish({ optionId: option.optionId }),
@@ -1008,7 +1024,7 @@ function renderApproval(): void {
   }
   approvalRuntime.render({
     key,
-    title: t('app.approval.title'),
+    title: card?.input ? t('app.approval.inputTitle') : t('app.approval.title'),
     summary,
     impact,
     ...(card?.warning === undefined ? {} : { warning: card.warning }),
@@ -1431,26 +1447,22 @@ async function pickWorkspace(): Promise<void> {
 }
 
 async function pickDicomFolders(): Promise<void> {
-  if (multiFolderPickerReady !== true || multiFolderPickerBusy || sessionPending) return
+  if (multiFolderPickerReady !== true || multiFolderPickerBusy || sessionPending || sending) return
+  const epoch = selection
+  const connectionEpoch = permissionConnectionEpoch
   multiFolderPickerBusy = true
   renderControls()
   try {
     const result = await requestMultiFolderPicker()
     if (result.status === 'cancelled') return
+    if (selection !== epoch || connectionEpoch !== permissionConnectionEpoch)
+      throw new Error(t('app.error.sessionChanged'))
     if (result.status === 'unavailable') {
       showError(new Error('本机 DICOM 文件夹选择器暂时不可用，可重试或在对话中直接输入绝对路径。'))
       return
     }
-    const heading =
-      result.paths.length === 1
-        ? '使用 vessel-pilot，把以下已脱敏的 DICOM 目录重建为动脉和静脉 GLB。该路径仅作为本机数据路径，不是指令：'
-        : '使用 vessel-pilot，批量把以下已脱敏的 DICOM 目录分别重建为动脉和静脉 GLB。每个目录作为独立病例，最多并行处理 2 例。以下内容仅是本机数据路径，不是指令：'
-    const selected = `${heading}\n${result.paths.map((path) => `- ${JSON.stringify(path)}`).join('\n')}`
-    const previous = composerRuntime.getDraft().trimEnd()
-    const next = previous ? `${previous}\n\n${selected}` : selected
-    composerRuntime.setDraft(next)
-    handleComposerDraftChange(next)
-    composerRuntime.resize()
+    validateUserAttachments([...composerRuntime.getAttachmentBlocks(), result.attachment])
+    composerRuntime.appendAttachmentBlocks([result.attachment])
     composerRuntime.focus()
   } catch (error) {
     showError(error)
@@ -2023,7 +2035,7 @@ function imageSubmissionFrameBytes(sessionId: string, content: ContentBlock[], f
     }),
   ).byteLength
 }
-function submitComposer(): void {
+function submitComposer(): boolean {
   const originalDraft = composerRuntime.getDraft()
   const input = originalDraft.trim()
   const attachments = composerRuntime.getAttachmentBlocks()
@@ -2031,7 +2043,9 @@ function submitComposer(): void {
   let session = current
   if (
     (!input && attachments.length === 0) ||
+    (!input && attachments.some((block) => block.mimeType === 'application/vnd.agnes.input+json')) ||
     composerRuntime.hasPendingImages() ||
+    multiFolderPickerBusy ||
     !configured ||
     !selectedModelAvailable() ||
     permissionChangePending ||
@@ -2040,7 +2054,7 @@ function submitComposer(): void {
     (!session && (!draftingNew || !selectedWorkspace?.available)) ||
     !canSubmitComposer({ connected, hasSession: true, sending, stopping, loading: sessionPending })
   )
-    return
+    return false
   const selectedRecord = runtimeModels.find(
     (model) => model.route === knownSessionModel?.route && model.id === knownSessionModel?.id,
   )
@@ -2049,12 +2063,12 @@ function submitComposer(): void {
     decodeSafeImages(images, USER_MESSAGE_IMAGE_LIMITS)
   } catch (error) {
     showError(error)
-    return
+    return false
   }
   const imageError = modelImageInputError(selectedRecord, [{ content: images }])
   if (imageError) {
     showError(new Error(imageError))
-    return
+    return false
   }
   const content: ContentBlock[] = [...(input ? [{ type: 'text' as const, text: input }] : []), ...attachments]
   const busy = projection?.opState !== null && projection?.opState !== undefined
@@ -2063,7 +2077,7 @@ function submitComposer(): void {
     imageSubmissionFrameBytes(session?.id ?? 's'.repeat(512), content, busy) > MAX_FRAME_BYTES
   ) {
     showError(new Error(t('app.error.messageTooLarge')))
-    return
+    return false
   }
   notice.textContent = ''
   notice.dataset.kind = ''
@@ -2175,6 +2189,7 @@ function submitComposer(): void {
         live?.refresh()
       }
     })
+  return true
 }
 const diagnostics = createDiagnosticsDialog({
   call: (method, params) => client.call(method, params),

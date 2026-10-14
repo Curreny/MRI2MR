@@ -681,6 +681,9 @@ export function mountComposerRegion(
     restoreAttachmentBlocks(attachments) {
       handle.current?.restoreAttachmentBlocks(attachments)
     },
+    appendAttachmentBlocks(attachments) {
+      handle.current?.appendAttachmentBlocks(attachments)
+    },
     resize() {
       handle.current?.resize()
     },

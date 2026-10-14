@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { McpServerConfig } from '../../../src/mcp/config.js'
 import { mcpLocalToolPrefix } from '../../../src/mcp/naming.js'
 import type { McpConnection, RemoteToolIndexRow } from '../../../src/mcp/register.js'
-import type { McpCatalogHub } from '../src/catalog-hub.js'
 import { fakeToolContext } from '../../../testkit/tool-context.js'
+import type { McpCatalogHub } from '../src/catalog-hub.js'
 import { mcpServerExtension } from '../src/extension.js'
 
 function fakeApi() {
@@ -132,23 +132,46 @@ describe('mcpServerExtension', () => {
     ])
   })
 
-  it('accepts bounded images from a trusted MCP server row', async () => {
-    const { api, tools } = fakeApi()
-    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC'
-    const conn: McpConnection = {
-      ...fakeConnection('gh', ['preview']),
-      async callTool() {
-        return { content: [{ type: 'image' as const, data: png, mimeType: 'image/png' }] }
-      },
-    }
-    mcpServerExtension(cfg, { catalogHub: fakeCatalogHub(), connect: async () => conn })(api)
-    await vi.waitFor(() => expect(tools).toHaveLength(1))
-    const result = await (tools[0] as ToolDef).execute({}, fakeToolContext())
-    expect(result.isError).not.toBe(true)
-    expect(result.content).toEqual([
-      { type: 'image', ref: { sha256: expect.any(String), size: expect.any(Number), mime: 'image/png' }, mime: 'image/png' },
-    ])
-  })
+  it.each([1, 2, 3])(
+    'enforces the production image budget for %i images from a trusted MCP row',
+    async (count) => {
+      const { api, tools } = fakeApi()
+      const png =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC'
+      const conn: McpConnection = {
+        ...fakeConnection('gh', ['preview']),
+        async callTool() {
+          return {
+            content: Array.from({ length: count }, () => ({
+              type: 'image' as const,
+              data: png,
+              mimeType: 'image/png',
+            })),
+          }
+        },
+      }
+      mcpServerExtension(cfg, { catalogHub: fakeCatalogHub(), connect: async () => conn })(api)
+      await vi.waitFor(() => expect(tools).toHaveLength(1))
+      const context = fakeToolContext()
+      const result = await (tools[0] as ToolDef).execute({}, context)
+      if (count > 2) {
+        expect(result.isError).toBe(true)
+        expect(result.content).toEqual([
+          { type: 'text', text: expect.stringContaining('image count exceeds media limit') },
+        ])
+        expect(context.calls.artifacts).toHaveLength(0)
+      } else {
+        expect(result.isError).not.toBe(true)
+        expect(result.content).toEqual(
+          Array.from({ length: count }, () => ({
+            type: 'image',
+            ref: { sha256: expect.any(String), size: expect.any(Number), mime: 'image/png' },
+            mime: 'image/png',
+          })),
+        )
+      }
+    },
+  )
 
   it('a non-deferred server never contributes rows to the catalog hub (eager tools are already disclosed directly)', async () => {
     const { api, tools } = fakeApi()

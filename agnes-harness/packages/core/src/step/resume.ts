@@ -118,7 +118,10 @@ async function askUnknownOutcome(s: SessionImpl, toolUseId: string, name: string
     summary: `did ${name} happen? allowed = it happened, rejected = it did not`,
     risk: 'unknown' as const,
     bindingHash: '',
-    deadline: new Date(s.d.clock() + s.preset.approval.timeoutMs).toISOString(),
+    deadline:
+      s.preset.approval.timeoutMs === 0
+        ? ''
+        : new Date(s.d.clock() + s.preset.approval.timeoutMs).toISOString(),
   }
   // Same hook as the tool-approval path in tools.ts and the park path in gate.ts: the payload
   // describes "any request for human approval", not "only a tool approval" — this ask has no tool

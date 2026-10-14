@@ -181,6 +181,7 @@ describe('tool types', () => {
       | 'skillInstall'
       | 'mcpManage'
       | 'pluginManage'
+      | 'requestUserInput'
       | 'projections'
       | 'session'
       | 'actor'

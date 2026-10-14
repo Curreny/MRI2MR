@@ -63,3 +63,99 @@
   color: var(--color-text-tertiary, #777);
   font-size: 12px;
 }
+
+[data-agnes-conversation-messages] .vessel-preview {
+  padding: 16px;
+  margin-block: 12px;
+  border: 1px solid var(--color-border-secondary, #ddd);
+  border-radius: 12px;
+  background: var(--color-bg-container, transparent);
+}
+
+[data-agnes-conversation-messages] .vessel-preview-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+[data-agnes-conversation-messages] .vessel-preview-identity,
+[data-agnes-conversation-messages] .vessel-preview-note,
+[data-agnes-conversation-messages] .vessel-preview figcaption {
+  color: var(--color-text-secondary, #777);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+[data-agnes-conversation-messages] .vessel-preview-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 12px;
+}
+
+[data-agnes-conversation-messages] .vessel-preview figure {
+  margin: 0;
+  min-width: 0;
+}
+[data-agnes-conversation-messages] .vessel-preview .ant-image-img {
+  border-radius: 8px;
+  object-fit: contain;
+}
+[data-agnes-conversation-messages] .vessel-preview figcaption {
+  margin-block: 6px;
+}
+[data-agnes-conversation-messages] .vessel-qc {
+  font-size: 12px;
+  color: var(--color-text-secondary, #777);
+}
+[data-agnes-conversation-messages] .vessel-qc[data-conclusion="fail"] {
+  color: var(--color-error, #b42318);
+}
+[data-agnes-conversation-messages] .vessel-metrics-scroll {
+  overflow-x: auto;
+}
+[data-agnes-conversation-messages] .vessel-metrics {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+[data-agnes-conversation-messages] .vessel-metrics :is(th, td) {
+  padding: 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border-secondary, #ddd);
+}
+[data-agnes-conversation-messages] .vessel-parameters {
+  margin-top: 12px;
+}
+[data-agnes-conversation-messages] .vessel-parameters summary {
+  cursor: pointer;
+}
+[data-agnes-conversation-messages] .vessel-preview dl {
+  font-size: 12px;
+  margin-block: 8px;
+}
+[data-agnes-conversation-messages] .vessel-preview dl > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  padding-block: 4px;
+}
+[data-agnes-conversation-messages] .vessel-preview dt {
+  overflow-wrap: anywhere;
+}
+[data-agnes-conversation-messages] .vessel-preview dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+[data-agnes-conversation-messages] .vessel-decision {
+  margin-top: 12px;
+}
+[data-agnes-conversation-messages] .vessel-parameter-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

@@ -16,7 +16,7 @@ export const approvalPolicy: SeamFactory<ApprovalSeam> = async (ctx) => {
   const cfg = readApprovalConfig(ctx.profile.preset)
   const tickets = createTicketStore(ctx, cfg.pendingTtlMs)
   const bind = (workspaceRoot: string): ApprovalSeam => ({
-    async ask(req): Promise<Verdict | ApprovalAnswer | Pending> {
+    async ask(req, opts): Promise<Verdict | ApprovalAnswer | Pending> {
       const tool = req.tool
       // A budget quote or an unknown-outcome question carries no tool, so the command table has
       // nothing to say about it and it goes straight to the prompter. Deliberate: an allow list
@@ -52,7 +52,7 @@ export const approvalPolicy: SeamFactory<ApprovalSeam> = async (ctx) => {
       const prompter = ctx.adapters.prompter
       if (prompter) {
         try {
-          return await prompter.ask(req, { signal: ctx.signal })
+          return await prompter.ask(req, { signal: opts?.signal ?? ctx.signal })
         } catch (e) {
           ctx.log.warn('prompter failed', { message: (e as Error).message })
           return 'unavailable'

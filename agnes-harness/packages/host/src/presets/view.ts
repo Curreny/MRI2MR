@@ -25,15 +25,16 @@ export function toPresetView(
       `preset ${doc.name}: approval.on_timeout may only be "rejected"`,
       { detail: { capability: 'approval.on_timeout', source: doc.name, value: approval.on_timeout } },
     )
-  // Zero is not "no timeout", which is what a recipe writing it means by it. It reaches the view as
-  // approval.timeoutMs = 0 and every approval times out at once - and a timed-out approval is a
-  // rejection, so the knob that reads as "wait forever" refuses everything instead. Refused rather
-  // than accepted-and-inverted; a recipe that wants no deadline omits the key.
+  // Zero waits until a human answers or the request is cancelled. Positive values retain the
+  // bounded, fail-closed behavior for deployments that explicitly require a deadline.
   const timeout = approval.timeout_ms
-  if (timeout !== undefined && !(typeof timeout === 'number' && Number.isInteger(timeout) && timeout >= 1))
+  if (
+    timeout !== undefined &&
+    !(typeof timeout === 'number' && Number.isSafeInteger(timeout) && timeout >= 0)
+  )
     throw new HostError(
       'E_PRESET_UNSUPPORTED',
-      `preset ${doc.name}: approval.timeout_ms must be a positive whole number of milliseconds`,
+      `preset ${doc.name}: approval.timeout_ms must be a nonnegative whole number of milliseconds (0 waits without a deadline)`,
       { detail: { capability: 'approval.timeout_ms', source: doc.name, value: timeout } },
     )
   const tier = ((doc.verifier ?? {}) as Record<string, unknown>).default_tier

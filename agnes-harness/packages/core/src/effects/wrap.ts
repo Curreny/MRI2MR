@@ -76,6 +76,8 @@ export function withTimeout<T>(
       return
     }
     signal?.addEventListener('abort', onAbort, { once: true })
+    // Zero explicitly means no time limit; abort and late-settlement cleanup still apply.
+    if (ms === 0) return
     handle = timers.setTimeout(() => finish(() => reject(new Error(`timeout: ${label}`))), ms)
     armed = true
     // An injected timer may fire synchronously before returning its handle.
@@ -181,8 +183,8 @@ export class SeamRuntime {
     let v: RawApproval
     try {
       v = await withTimeout(
-        this.withApproval((approval) => approval.ask(req)),
-        this.preset.approval.timeoutMs,
+        this.withApproval((approval) => approval.ask(req, { signal })),
+        req.kind === 'input' ? 0 : this.preset.approval.timeoutMs,
         'approval.ask',
         signal,
         this.o.timers,
@@ -207,6 +209,16 @@ export class SeamRuntime {
     // next; until a call can park on it, the call is refused as unanswered.
     if (answer.verdict === 'unavailable')
       return { verdict: 'unavailable', reason: answer.reason ?? 'no_approver' }
+    if (req.kind === 'input') {
+      if (
+        answer.verdict === 'allowed-once' &&
+        req.input?.options.some((option) => option.id === answer.selectionId)
+      )
+        return answer
+      return answer.verdict === 'cancelled'
+        ? answer
+        : { verdict: 'rejected', ...(answer.reason ? { reason: answer.reason } : {}) }
+    }
     return answer.reason === undefined ? answer.verdict : answer
   }
 
@@ -217,7 +229,7 @@ export class SeamRuntime {
           const guard = approval.guard
           return guard ? guard.call(approval, req) : Promise.resolve(undefined)
         }),
-        this.preset.approval.timeoutMs,
+        this.preset.approval.timeoutMs || 60_000,
         'approval.guard',
         signal,
         this.o.timers,
@@ -250,7 +262,7 @@ export class SeamRuntime {
           const list = approval.listGrants
           return list ? list.call(approval, query) : Promise.resolve([])
         }),
-        this.preset.approval.timeoutMs,
+        this.preset.approval.timeoutMs || 60_000,
         'approval.listGrants',
         signal,
         this.o.timers,
@@ -265,7 +277,7 @@ export class SeamRuntime {
   approvalResume(ticket: string, verdict: Verdict, signal?: AbortSignal) {
     return withTimeout(
       this.withApproval((approval) => approval.resume(ticket, verdict)),
-      this.preset.approval.timeoutMs,
+      this.preset.approval.timeoutMs || 60_000,
       'approval.resume',
       signal,
       this.o.timers,
@@ -284,7 +296,7 @@ export class SeamRuntime {
           await put.call(approval, grant)
           return true
         }),
-        this.preset.approval.timeoutMs,
+        this.preset.approval.timeoutMs || 60_000,
         'approval.putGrant',
         signal,
         this.o.timers,
@@ -302,7 +314,7 @@ export class SeamRuntime {
           const revoke = approval.revokeGrant
           return revoke ? revoke.call(approval, grantId, revokedAt) : Promise.resolve(null)
         }),
-        this.preset.approval.timeoutMs,
+        this.preset.approval.timeoutMs || 60_000,
         'approval.revokeGrant',
         signal,
         this.o.timers,

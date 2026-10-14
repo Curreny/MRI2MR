@@ -145,7 +145,7 @@ describe('every key the kernel reads is spelled the way the kernel spells it', (
       isolation: 'worktree',
       tools: {
         ...fromNothing.tools,
-        timeouts: { web_fetch: 30000, skill_helper_import: 240000, shell: 600000 },
+        timeouts: { request_user_input: 0, web_fetch: 30000, skill_helper_import: 240000, shell: 600000 },
       },
     })
   })

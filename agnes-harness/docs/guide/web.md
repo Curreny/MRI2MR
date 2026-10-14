@@ -43,6 +43,12 @@ Session and approval traffic uses the browser SDK's direct WebSocket connection 
 The first message proceeds once the new session is ready; refreshing the sidebar does not block sending. A sidebar refresh failure is reported separately and does not restore an already submitted message as a draft.
 Resource updates discovered during startup are prepared while the worker is idle. Updates discovered during a running turn remain deferred until before the next turn. Repeated Skill scans with unchanged resources do not trigger another worker reload.
 
+### Select a local DICOM folder
+
+With the local VesselPilot integration configured, click **Select a DICOM folder** to add a directory manifest to the draft attachments, preserving existing text and attachments. You can select more folders or remove attachments before sending. The backend only checks directory readability; selection never sends a message or generates a reconstruction instruction. Enter a prompt and click Send so the agent can determine your intent and choose the required tools and steps. Directory attachments require a nonempty prompt. Cancelling adds nothing. The DICOM files stay at their selected local paths, so keep those directories available while the task runs. This entry is for a local agent on the same computer, not remote browser uploads.
+
+Task attachments use MIME `application/vnd.agnes.task+json` with `{ version: 1, instruction: string, input: unknown }`. The backend derives `instruction` as user-level text and encloses `input` as untrusted data; this does not grant filesystem access or bypass tool permissions. The decoded task is limited to 256 KiB and instructions to 8192 characters. Ordinary JSON, malformed tasks and unknown versions keep ordinary file behavior.
+
 ### Attach files and images
 
 Click the paperclip beside Send, paste files, or drag them onto the composer. All file types are accepted, including empty files, with at most 50 attachments and 100 MiB of decoded attachment bytes in total per message. A text-only model can also receive attachments. PNG and JPEG use native image input when the selected model supports it, with an additional total limit of 8 million pixels. Images are downscaled to a 1456-pixel long edge or the model’s stricter dimensions first, so the byte limit applies after processing. JPEGs that the browser can decode but the strict validator rejects, such as files with trailing data, are re-encoded before validation; ordinary small images stay unchanged. The server validates attachment names, MIME types, canonical Base64 and aggregate bytes; native images also undergo image structure and dimension checks. Attachments travel in JSON, so the 144 MiB WebSocket frame limit also applies.
@@ -80,6 +86,12 @@ Switch from Chat to Trajectory to review a session by turn and step. Select a re
 Fold turns or tool calls, search the records, or load earlier history as needed. Tool arguments and results in **Projected content** are previews; choose **Full input** or **Full output** to read the recorded detail on demand. **Timing** shows recorded time fields. Missing timing, usage, or history is labeled rather than estimated.
 
 <a id="日常管理"></a>
+
+## Human approval and choices
+
+Approvals appear as a card above the chat composer, alongside the conversation rather than covering the page. The card shows the question, context and available choices. The selected option returns to the current task, which continues without another chat message. `request_user_input` supports workflow decisions such as deidentification confirmation and sequence selection; a choice does not grant other tool permissions.
+
+The defaults `approval.timeout_ms: 0` and `tools.timeouts.request_user_input: 0` wait without a time limit. Explicit positive approval timeouts still reject on expiry. Keep the page and backend connected while answering. Cancellation, stopping, session switching or a disconnected transport cancels/refuses the live request; pending approval cards are not durably recovered across page refreshes or daemon restarts.
 
 ## Everyday management
 

@@ -674,6 +674,14 @@ describe('agnesd supervisor: real end-to-end', () => {
           })
           expect(res.error).toBeUndefined()
           expect((res.result as { stopReason: string }).stopReason).toBe('end_turn')
+          await vi.waitFor(() => {
+            const rows = readFileSync(join(dir, 'logs', 'agent', 'agent.jsonl'), 'utf8')
+              .trim()
+              .split('\n')
+              .map((line) => JSON.parse(line))
+            expect(rows.some((row) => row.sessionId === sessionId && row.event === 'turn/start')).toBe(true)
+            expect(rows.some((row) => row.sessionId === sessionId && row.event === 'turn/end')).toBe(true)
+          })
         } finally {
           c.socket.end()
         }

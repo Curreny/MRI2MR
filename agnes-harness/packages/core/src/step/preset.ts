@@ -71,9 +71,9 @@ export function presetDefaults(): PresetView {
     budget: { preflight: 'estimate', perRequestCap: null, onExceed: 'quote', maxSteps: null },
     // A timed-out approval reads as a rejection and nothing else: an unanswered prompt must never
     // be the path by which a destructive call proceeds.
-    approval: { onTimeout: 'rejected', timeoutMs: 60000, onUnavailable: 'deny', pendingTtlMs: 86400000 },
+    approval: { onTimeout: 'rejected', timeoutMs: 0, onUnavailable: 'deny', pendingTtlMs: 86400000 },
     sandbox: { onUnavailable: 'deny' },
-    tools: { timeoutMs: 120000, timeouts: {}, outputMaxBytes: 32768 },
+    tools: { timeoutMs: 120000, timeouts: { request_user_input: 0 }, outputMaxBytes: 32768 },
     verifier: { timeoutMs: 30000, defaultTier: 0 },
     repair: { timeoutMs: 10000 },
     completionGate: { minItems: 3 },
@@ -144,7 +144,7 @@ export function readPreset(raw: Record<string, unknown>, name: string): PresetVi
     sandbox: { onUnavailable: pick(raw, 'sandbox.on_unavailable', d.sandbox.onUnavailable) },
     tools: {
       timeoutMs: pick(raw, 'tools.timeout_ms', d.tools.timeoutMs),
-      timeouts: pick(raw, 'tools.timeouts', d.tools.timeouts),
+      timeouts: { ...d.tools.timeouts, ...pick(raw, 'tools.timeouts', {}) },
       outputMaxBytes: pick(raw, 'tools.output_max_bytes', d.tools.outputMaxBytes),
     },
     verifier: {

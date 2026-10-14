@@ -1,6 +1,6 @@
 /** 宿主服务与插件身份类型（WC6）。实现由宿主在启动时实例化并包装宿主既有状态（WC8），本包只定义合同。 */
 import { type Context, Service } from '@agnes/cordis'
-import type { ArtifactReadResult, ArtifactRef } from '@agnes/protocol'
+import type { ArtifactReadResult, ArtifactRef, ToolCall, ToolResult } from '@agnes/protocol'
 
 /** 当前页面已连接的 SDK 客户端；宿主提供同一实例（WC6）。
  *  用浏览器导出变体：插件跑在页面里，Node 专属面（packages/skills 等）不在页面上。 */
@@ -83,6 +83,12 @@ export type SessionClientHandle = {
   followUp(input: unknown): Promise<unknown>
   compact(instructions?: string): Promise<unknown>
   cancel(): Promise<void>
+  /** Optional on older embedders; reads durable detail without advancing the live cursor. */
+  readToolDetail?(
+    callSeq: number,
+    resultSeq?: number,
+    opts?: { signal?: AbortSignal },
+  ): Promise<{ call: ToolCall; result?: ToolResult }>
 }
 
 export type SessionProjection = {
