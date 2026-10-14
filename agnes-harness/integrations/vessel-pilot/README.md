@@ -1,6 +1,6 @@
 # VesselPilot integration
 
-This integration exposes `scripts/Vascular_cmd.py` to Agnes Harness as a constrained local stdio MCP server. The versioned Skill source is `skill/SKILL.md`. Install it under the active `AGH_HOME/skills/vessel-pilot/` so it is available in every workspace opened by that Agnes instance.
+This integration exposes `scripts/Vascular_cmd.py` to Agnes Harness as a constrained local stdio MCP server. The sole versioned VesselPilot Skill is `MRI2MR/.agh/skills/vessel-pilot/SKILL.md`. Open `MRI2MR` as the Agnes workspace so the workspace Skill is discovered.
 
 ## Runtime
 
@@ -70,15 +70,7 @@ Versioned directories such as `dist\local-vessel-pilot-*` may be used for isolat
 
 The MCP definition is created disabled and untrusted. Review it in **Settings → MCP**, then enable it. A normal local instance can approve the exact native Python executable through this review. If an administrator enforces a deployment allowlist, `AGNES_MCP_STDIO_ALLOWLIST` must contain the exact executable path; pre-setting that variable disables dynamic local approvals.
 
-Install the user-level Skill into the same `AGH_HOME`, then refresh and enable it once for the profile:
-
-```powershell
-.\integrations\vessel-pilot\install-skill.ps1 -AgnesHome $env:AGH_HOME
-node $agnes skills refresh --root-key user-agnes
-node $agnes resources list --kind skill
-```
-
-In **Settings → Skills**, review and enable the `user/user-agnes` source. It is available in every selected workspace of this Agnes instance; a workspace-level Skill with the same name takes precedence and must be removed or explicitly reprioritized. Start a new turn or chat and explicitly ask Agnes to use `vessel-pilot`. Skill instructions do not install the MCP server: the MCP must also be enabled in this same home/profile.
+Open an Agnes session whose workspace is the `MRI2MR` project root. In **Settings → Skills**, refresh the workspace source, review and enable its `vessel-pilot` Skill, and confirm it is the ready winner. Then start a new turn or chat and explicitly ask Agnes to use `vessel-pilot`. The Skill does not install the MCP server: the MCP must also be enabled in the same home/profile.
 
 ## Diagnose missing tools
 
@@ -86,8 +78,8 @@ If Agnes says that `vessel-pilot` or its tools do not exist:
 
 1. Check the Web and daemon command lines and confirm they use the same `AGH_HOME`, profile, data directory, and origin.
 2. Run `mcp list/status/tools` only after setting that same `AGH_HOME`.
-3. Confirm `AGH_HOME/skills/vessel-pilot/SKILL.md` exists and `user/user-agnes` is `ready`; a different `AGH_HOME` has a different Skill registry.
-4. Confirm the Skill is `trust=trusted desired=enabled actual=ready winner` in the selected workspace. Check for a same-name workspace Skill shadowing the user-level one.
+3. Confirm `MRI2MR/.agh/skills/vessel-pilot/SKILL.md` exists and the session workspace is `MRI2MR`; another workspace will not discover this Skill.
+4. Confirm the workspace Skill is `trust=trusted desired=enabled actual=ready winner`. Check for any older user-level copy only if the wrong candidate wins.
 5. Confirm the MCP is `connection=ready` and exposes eleven tools, then begin a new turn so the resource snapshot is reloaded.
 
 ## Conversation entry points
@@ -104,9 +96,9 @@ Example chat requests:
 
 ```text
 把这个已脱敏 DICOM 目录转成 nii，只要转换结果路径。
-只重建动脉，阈值 850，保留网格面数比例 0.4。
+只重建动脉，阈值 850，其他参数用默认值。
 只重建静脉，弱生长容差 0.87，其他参数用默认值。
-只优化静脉，最多比较 4 个候选；弱生长容差在 0.83、0.85、0.87 中调整，固定最终最小区域为 14500。
+只优化静脉，最多比较 4 个候选；弱生长容差在 0.83、0.85、0.87 中调整，第一轮最小区域固定为 1000。
 使用 vessel-pilot。请打开文件夹选择器，我来选已脱敏的 DICOM 目录；完成后生成动脉和静脉 GLB。
 使用 vessel-pilot，把已脱敏的 C:\Users\admin\Desktop\MRI2MR-core\workspace\Data_vessel_01 重建为动脉和静脉 GLB。
 使用 vessel-pilot，批量处理以下已脱敏的 DICOM 目录，每个目录作为独立病例，最多并行两例：C:\Data\case-01 和 D:\MRI\case-02。
@@ -133,7 +125,7 @@ Synthetic preview checks (no patient data or long reconstruction jobs):
 corepack pnpm exec vitest run packages/web/test/vessel-tool-preview.test.tsx packages/web/test/conversation-message-adapter.test.ts --maxWorkers=1
 ```
 
-This remains the same `vessel-pilot` MCP server with eleven tools. Intent routing belongs to `skill/SKILL.md`; the MCP schema, service validation and job runner enforce the selected scope. No second MCP or independent medical algorithm is introduced. The implementation still runs `scripts/Vascular_cmd.py`.
+This remains the same `vessel-pilot` MCP server with eleven tools. Intent routing belongs to [the workspace Skill](../../../.agh/skills/vessel-pilot/SKILL.md); the MCP schema, service validation and job runner enforce the selected scope. No second MCP or independent medical algorithm is introduced. The implementation still runs `scripts/Vascular_cmd.py`.
 
 | Tool | Capability and configurable inputs |
 | --- | --- |
@@ -149,17 +141,17 @@ This remains the same `vessel-pilot` MCP server with eleven tools. Intent routin
 | `suggest_vessel_parameters` | Suggest one untried change from the relevant visual assessment; optional `search_space`, `locked_parameters`, and `max_candidates` (1–100, default 6). Does not execute a candidate. |
 | `finalize_vessel_case` | Save a candidate only when technical and recorded visual QC pass; return exact artifact paths and checksums. |
 
-`parameters.py` is the shared definition for fourteen numeric parameters and their defaults, bounds and side-specific applicability. The complete user-facing table is in [the Skill](skill/SKILL.md#可指定的重建参数). Artery options cover intensity threshold, component size and mesh retention; vein options cover Frangi scales, strong/weak seed percentiles and growth tolerances, two component-size filters and mesh retention. `marching_cubes_level` applies to the requested vessel(s). All numeric parameters accept values within their bounds rather than a small discrete preset list. Integer sizes and scales must be integers, and invalid cross-parameter combinations are rejected before launching a job.
+`parameters.py` defines fourteen numeric parameters with defaults, bounds and side-specific applicability. The [workspace Skill](../../../.agh/skills/vessel-pilot/SKILL.md#可指定的重建参数) permits users and agents to change only `vessel_threshold`, `mrv_weak_grow_tolerance`, and `mrv_post_process_min_size`; the other eleven parameters stay at their defaults. The MCP schema remains broader for compatibility, but agents following the Skill must not pass, search, or compare non-default values for those fixed parameters. Integer sizes must be integers, and invalid combinations are rejected before launching a job.
 
-For example, `start_vessel_candidate(case_id=..., candidate_id=..., target="artery", parameters={"vessel_threshold": 850, "vessel_decimation_fraction": 0.4})` launches only the artery stage. Explicit user values are preserved, while omitted applicable parameters use defaults. The historical top-level `vessel_threshold`, `mrv_weak_grow_tolerance`, and `mrv_post_process_min_size` arguments remain supported for existing callers; conflicting duplicate values are rejected. Single-side requests must not pass parameters that apply only to the other side.
+For example, `start_vessel_candidate(case_id=..., candidate_id=..., target="artery", parameters={"vessel_threshold": 850})` launches only the artery stage. Omitted applicable parameters use defaults. The historical top-level `vessel_threshold`, `mrv_weak_grow_tolerance`, and `mrv_post_process_min_size` arguments remain supported for existing callers; conflicting duplicate values are rejected. Single-side requests must not pass parameters that apply only to the other side.
 
-An ordinary reconstruction runs one candidate. Only an explicit request to optimize or compare settings starts a bounded search. “Automatic reconstruction” alone does not authorize additional candidates. Frangi cache keys include both the source MRV hash and scale parameters, so changing scales cannot reuse an incompatible cached filter result.
+Reconstruction requests use the skill's bounded parameter search by default: the agent evaluates the initial candidate and adjusts supported parameters when the visual and technical assessment calls for improvement. Users can explicitly request a single candidate or lock parameters; supplied numeric values otherwise serve as starting values. Conversion-only, inspection and read-only requests do not start a search. Each `start_vessel_candidate` call still launches only one candidate; the agent coordinates subsequent candidates through `suggest_vessel_parameters`. Frangi cache keys include both the source MRV hash and scale parameters, so changing scales cannot reuse an incompatible cached filter result.
 
 ## Safety boundary
 
 - The server maps case IDs to local directories. `--allow-any-input` relaxes only the read-side root check for a user-selected or explicitly supplied directory; outputs still stay under `--case-root`.
 - Candidate IDs are immutable.
-- Only the fourteen documented numeric reconstruction parameters are accepted, with type/range and target validation. Tool inputs cannot introduce arbitrary command-line flags or executable paths.
+- The MCP accepts fourteen documented numeric reconstruction parameters for compatibility, with type/range and target validation. The workspace Skill restricts the agent to three adjustable parameters and fixes the other eleven at their defaults. Tool inputs cannot introduce arbitrary command-line flags or executable paths.
 - Subprocess commands use fixed executables and argument arrays; the model cannot provide shell text.
 - `technical_conclusion=pass` means mesh checks passed. After the first evaluation, overall `conclusion=review` until a second `evaluate_vessel_candidate` call with `assessments` records all requested vessels. `good` on every side gives visual `pass`; `uncertain` gives `review`; a visible defect gives `fail`. Overall `pass` requires both technical and visual pass. This is not clinical validation, and the manifest retains `clinical_quality_review_required=true`. Existing pre-update reports must be evaluated again and visually assessed before finalization.
 
