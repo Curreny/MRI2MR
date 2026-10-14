@@ -145,9 +145,9 @@ This remains the same `vessel-pilot` MCP server with eleven tools. Intent routin
 | `get_vessel_job` | Read progress; `wait_seconds` is 1–55, default 55. |
 | `cancel_vessel_job` | Cancel the specified job and its child process tree. |
 | `list_vessel_candidates` | Read candidates, targets, effective parameters and existing reports. |
-| `evaluate_vessel_candidate` | Check requested output meshes and return corresponding montage images and metrics. |
+| `evaluate_vessel_candidate` | First call checks requested meshes and returns montage images and metrics. A second call with `assessments` saves a visual label and image-based reason for each requested vessel, bound to mesh and preview checksums. |
 | `suggest_vessel_parameters` | Suggest one untried change from the relevant visual assessment; optional `search_space`, `locked_parameters`, and `max_candidates` (1–100, default 6). Does not execute a candidate. |
-| `finalize_vessel_case` | Save the selected technically passing candidate and return exact artifact paths and checksums. |
+| `finalize_vessel_case` | Save a candidate only when technical and recorded visual QC pass; return exact artifact paths and checksums. |
 
 `parameters.py` is the shared definition for fourteen numeric parameters and their defaults, bounds and side-specific applicability. The complete user-facing table is in [the Skill](skill/SKILL.md#可指定的重建参数). Artery options cover intensity threshold, component size and mesh retention; vein options cover Frangi scales, strong/weak seed percentiles and growth tolerances, two component-size filters and mesh retention. `marching_cubes_level` applies to the requested vessel(s). All numeric parameters accept values within their bounds rather than a small discrete preset list. Integer sizes and scales must be integers, and invalid cross-parameter combinations are rejected before launching a job.
 
@@ -161,7 +161,7 @@ An ordinary reconstruction runs one candidate. Only an explicit request to optim
 - Candidate IDs are immutable.
 - Only the fourteen documented numeric reconstruction parameters are accepted, with type/range and target validation. Tool inputs cannot introduce arbitrary command-line flags or executable paths.
 - Subprocess commands use fixed executables and argument arrays; the model cannot provide shell text.
-- `conclusion=pass` means technical mesh checks passed. It is not clinical validation, and the manifest retains `clinical_quality_review_required=true`.
+- `technical_conclusion=pass` means mesh checks passed. After the first evaluation, overall `conclusion=review` until a second `evaluate_vessel_candidate` call with `assessments` records all requested vessels. `good` on every side gives visual `pass`; `uncertain` gives `review`; a visible defect gives `fail`. Overall `pass` requires both technical and visual pass. This is not clinical validation, and the manifest retains `clinical_quality_review_required=true`. Existing pre-update reports must be evaluated again and visually assessed before finalization.
 
 ## Failure and boundary behavior
 

@@ -124,11 +124,29 @@ TOOLS = [
     },
     {
         "name": "evaluate_vessel_candidate",
-        "description": "Validate the candidate's requested vessel outputs and return their technical metrics and six-view montage images. The artery-envelope vein proxy is available only for a both-vessels candidate.",
+        "description": "First call without assessments validates meshes and returns metrics and six-view images. After viewing them, call again with a label and image-based reason for each requested vessel to save visual QC. Overall QC remains review until then.",
         "inputSchema": object_schema(
             {
                 "case_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
                 "candidate_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                "assessments": {
+                    "type": "object",
+                    "properties": {
+                        vessel: object_schema(
+                            {
+                                "label": {"type": "string", "enum": labels},
+                                "reason": {"type": "string", "minLength": 8, "maxLength": 2000},
+                            },
+                            ["label", "reason"],
+                        )
+                        for vessel, labels in {
+                            "artery": ["good", "too_dense", "too_sparse", "uncertain"],
+                            "vein": ["good", "too_dense", "too_sparse", "scalp_dominant", "intracranial_sparse", "uncertain"],
+                        }.items()
+                    },
+                    "additionalProperties": False,
+                    "minProperties": 1,
+                },
             },
             ["case_id", "candidate_id"],
         ),
@@ -162,7 +180,7 @@ TOOLS = [
     },
     {
         "name": "finalize_vessel_case",
-        "description": "Finalize an evaluated technical-QC-passing candidate and create a manifest.",
+        "description": "Finalize a candidate only after both technical and recorded visual QC pass, then create a manifest.",
         "inputSchema": object_schema(
             {
                 "case_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},

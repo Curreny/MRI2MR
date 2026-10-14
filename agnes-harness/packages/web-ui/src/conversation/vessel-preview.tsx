@@ -61,7 +61,7 @@ export function VesselPreview({
         <strong>{value.title}</strong>
         {value.conclusion && (
           <span className="vessel-qc" data-conclusion={value.conclusion}>
-            {t('vessel.technicalQc')}: {t(value.conclusion === 'pass' ? 'vessel.pass' : 'vessel.fail')}
+            {t('vessel.qualityQc')}: {t(`vessel.${value.conclusion}`)}
           </span>
         )}
       </header>
@@ -170,7 +170,7 @@ export function VesselPreview({
           {warning}
         </p>
       ))}
-      {['candidate', 'final', 'tuning'].includes(value.stage) && (
+      {['candidate', 'visual_qc', 'final', 'tuning'].includes(value.stage) && (
         <p className="vessel-preview-note">{t('vessel.meshNote')}</p>
       )}
     </section>

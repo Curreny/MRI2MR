@@ -8,6 +8,7 @@ export const conversationLocaleCatalog: LocaleCatalog = {
   en: {
     'vessel.pass': 'Pass',
     'vessel.fail': 'Fail',
+    'vessel.review': 'Needs review',
     'vessel.good': 'Good',
     'vessel.tooDense': 'Too dense',
     'vessel.tooSparse': 'Too sparse',
@@ -25,6 +26,7 @@ export const conversationLocaleCatalog: LocaleCatalog = {
     'vessel.unavailable': 'Preview unavailable. The recorded tool result is still available in details.',
     'vessel.retry': 'Retry preview',
     'vessel.technicalQc': 'Technical QC',
+    'vessel.qualityQc': 'Candidate QC',
     'vessel.model': 'Model',
     'vessel.vertices': 'Vertices',
     'vessel.faces': 'Faces',
@@ -214,6 +216,7 @@ export const conversationLocaleCatalog: LocaleCatalog = {
   'zh-CN': {
     'vessel.pass': '通过',
     'vessel.fail': '未通过',
+    'vessel.review': '待复核',
     'vessel.good': '效果良好',
     'vessel.tooDense': '过密',
     'vessel.tooSparse': '过疏',
@@ -231,6 +234,7 @@ export const conversationLocaleCatalog: LocaleCatalog = {
     'vessel.unavailable': '预览暂不可用，可展开工具详情查看已保存的结果。',
     'vessel.retry': '重新加载预览',
     'vessel.technicalQc': '技术质控',
+    'vessel.qualityQc': '候选质控',
     'vessel.model': '模型',
     'vessel.vertices': '顶点数',
     'vessel.faces': '面数',

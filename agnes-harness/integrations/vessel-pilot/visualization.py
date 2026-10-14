@@ -190,9 +190,11 @@ def tool_visualization(service: Any, name: str, arguments: dict[str, Any], data:
             images = [("NIfTI · " + " / ".join(labels), canvas)]
     elif name in {"evaluate_vessel_candidate", "finalize_vessel_case", "suggest_vessel_parameters"}:
         stage = {"evaluate_vessel_candidate": "candidate", "finalize_vessel_case": "final", "suggest_vessel_parameters": "tuning"}[name]
-        title = {"candidate": "候选评估 · GLB 六视图", "final": "最终模型 · GLB 六视图", "tuning": "Agent 参数寻优 · 本轮判断与下一步"}[stage]
+        if name == "evaluate_vessel_candidate" and arguments.get("assessments") is not None:
+            stage = "visual_qc"
+        title = {"candidate": "候选评估 · GLB 六视图", "visual_qc": "视觉质控 · 判断与依据", "final": "最终模型 · GLB 六视图", "tuning": "Agent 参数寻优 · 本轮判断与下一步"}[stage]
         case_dir, _ = service._load_case(case_id)
-        report = data if stage == "candidate" else json.loads((case_dir / "candidates" / candidate_id / "report.json").read_text(encoding="utf-8"))
+        report = data if stage in {"candidate", "visual_qc"} else json.loads((case_dir / "candidates" / candidate_id / "report.json").read_text(encoding="utf-8"))
         parameters, metrics, conclusion = report.get("parameters", {}), report.get("metrics", {}), report.get("conclusion")
         for vessel, value in report.get("preview_montages", {}).items():
             path = Path(value).resolve(strict=True)
@@ -212,6 +214,8 @@ def tool_visualization(service: Any, name: str, arguments: dict[str, Any], data:
     visualization = {"version": 1, "stage": stage, "title": title, "case_id": case_id,
                      "candidate_id": candidate_id, "parameters": parameters, "metrics": metrics,
                      "conclusion": conclusion, "images": descriptors, "warnings": warnings}
+    if stage == "visual_qc":
+        visualization["visual_assessment"] = report.get("visual_assessment")
     if stage == "tuning":
         visualization["decision"] = {"status": data.get("status"), "reason": data.get("reason"),
                                      "next_parameters": data.get("parameters"),

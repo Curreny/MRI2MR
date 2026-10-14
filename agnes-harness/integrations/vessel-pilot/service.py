@@ -23,6 +23,10 @@ ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 TERMINAL_JOB_STATES = {"succeeded", "failed", "cancelled"}
 MAX_JOB_WAIT_SECONDS = 55
 DICOM_SUFFIXES = {".dcm", ".dicom", ".ima"}
+VISUAL_LABELS = {
+    "artery": {"good", "too_dense", "too_sparse", "uncertain"},
+    "vein": {"good", "too_dense", "too_sparse", "scalp_dominant", "intracranial_sparse", "uncertain"},
+}
 
 
 class VesselPilotInputError(ValueError):
@@ -839,7 +843,12 @@ class VesselPilotService:
             montage.paste(preview, (x, y))
         montage.quantize(colors=128).save(output / "montage.png", optimize=True)
 
-    def evaluate_candidate(self, case_id: str, candidate_id: str) -> dict[str, Any]:
+    def evaluate_candidate(
+        self, case_id: str, candidate_id: str,
+        assessments: dict[str, dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        if assessments is not None:
+            return self.record_visual_assessment(case_id, candidate_id, assessments)
         candidate_id = validate_id(candidate_id, "candidate_id")
         case_dir, manifest = self._load_case(case_id)
         candidate_dir = case_dir / "candidates" / candidate_id
@@ -880,7 +889,29 @@ class VesselPilotService:
                 violations.append(f"{name}: vertex count exceeds limit")
             if item["faces"] > limits["max_faces"]:
                 violations.append(f"{name}: face count exceeds limit")
-        conclusion = "fail" if violations else "pass"
+        technical_conclusion = "fail" if violations else "pass"
+        preview_montages = {
+            name: str(candidate_dir / "previews" / name / "montage.png") for name in metrics
+        }
+        mesh_hashes = {name: item["sha256"] for name, item in metrics.items()}
+        preview_hashes = {
+            name: sha256_file(Path(path)) for name, path in preview_montages.items()
+        }
+        previous_report_path = candidate_dir / "report.json"
+        try:
+            previous = read_json(previous_report_path) if previous_report_path.is_file() else {}
+        except (OSError, ValueError):
+            previous = {}
+        previous_visual = previous.get("visual_assessment")
+        if not isinstance(previous_visual, dict) or (
+            previous_visual.get("mesh_sha256") != mesh_hashes
+            or previous_visual.get("preview_sha256") != preview_hashes
+        ):
+            previous_visual = None
+        visual_conclusion = previous_visual.get("conclusion") if previous_visual else "pending"
+        conclusion = "fail" if technical_conclusion == "fail" else (
+            visual_conclusion if visual_conclusion != "pending" else "review"
+        )
         report = {
             "schema_version": 1,
             "case_id": case_id,
@@ -889,20 +920,80 @@ class VesselPilotService:
             "created_at": utc_now(),
             "input_fingerprint": manifest["input_fingerprint"],
             "parameters": read_json(candidate_dir / "parameters.json"),
-            "quality_scope": "technical_mesh_qc_v1",
+            "quality_scope": "technical_mesh_and_visual_qc_v2",
             "clinical_quality_review_required": True,
             "limits": limits,
             "metrics": metrics,
             "vein_distribution_proxy": vein_distribution_proxy,
             "vein_distribution_proxy_unavailable_reason": None if target == "both" else "Requires both artery and vein meshes; not computed for a single-vessel task",
             "violations": violations,
+            "technical_conclusion": technical_conclusion,
+            "visual_assessment": previous_visual,
+            "visual_conclusion": visual_conclusion,
             "conclusion": conclusion,
             "preview_root": str(candidate_dir / "previews"),
-            "preview_montages": {
-                name: str(candidate_dir / "previews" / name / "montage.png") for name in metrics
-            },
+            "preview_montages": preview_montages,
+            "preview_sha256": preview_hashes,
         }
         atomic_json(candidate_dir / "report.json", report)
+        return report
+
+    def record_visual_assessment(
+        self, case_id: str, candidate_id: str, assessments: dict[str, dict[str, str]]
+    ) -> dict[str, Any]:
+        candidate_id = validate_id(candidate_id, "candidate_id")
+        case_dir, _ = self._load_case(case_id)
+        candidate_dir = case_dir / "candidates" / candidate_id
+        report_path = candidate_dir / "report.json"
+        if not report_path.is_file():
+            raise ValueError("Evaluate the candidate before recording visual assessment")
+        report = read_json(report_path)
+        vessels = target_vessels(self._candidate_target(candidate_dir))
+        if not isinstance(assessments, dict) or set(assessments) != set(vessels):
+            raise ValueError("Visual assessments must cover exactly the candidate's requested vessels")
+        validated = {}
+        for vessel in vessels:
+            item = assessments[vessel]
+            if not isinstance(item, dict) or set(item) != {"label", "reason"}:
+                raise ValueError(f"{vessel} visual assessment requires label and reason")
+            label, reason = item["label"], item["reason"]
+            if label not in VISUAL_LABELS[vessel]:
+                raise ValueError(f"Invalid {vessel} visual assessment label")
+            if not isinstance(reason, str) or not 8 <= len(reason.strip()) <= 2000:
+                raise ValueError(f"{vessel} visual assessment reason must be 8-2000 characters")
+            validated[vessel] = {"label": label, "reason": reason.strip()}
+        mesh_hashes = report.get("metrics", {})
+        if set(mesh_hashes) != set(vessels):
+            raise ValueError("Candidate technical metrics are incomplete; evaluate it again")
+        mesh_hashes = {name: mesh_hashes[name]["sha256"] for name in vessels}
+        for vessel in vessels:
+            if sha256_file(candidate_dir / f"{vessel}.glb") != mesh_hashes[vessel]:
+                raise ValueError("Candidate changed after evaluation; evaluate it again")
+        preview_hashes = {}
+        for vessel in vessels:
+            path = Path(report["preview_montages"][vessel])
+            if not path.is_file():
+                raise ValueError("Candidate preview is missing; evaluate it again")
+            preview_hashes[vessel] = sha256_file(path)
+            if preview_hashes[vessel] != report.get("preview_sha256", {}).get(vessel):
+                raise ValueError("Candidate preview changed after evaluation; evaluate it again")
+        labels = {item["label"] for item in validated.values()}
+        visual_conclusion = "review" if "uncertain" in labels else (
+            "pass" if labels == {"good"} else "fail"
+        )
+        report["visual_assessment"] = {
+            "source": "agent_reported",
+            "recorded_at": utc_now(),
+            "vessels": validated,
+            "mesh_sha256": mesh_hashes,
+            "preview_sha256": preview_hashes,
+            "conclusion": visual_conclusion,
+        }
+        report["visual_conclusion"] = visual_conclusion
+        report["conclusion"] = (
+            "fail" if report.get("technical_conclusion") == "fail" else visual_conclusion
+        )
+        atomic_json(report_path, report)
         return report
 
     def suggest_parameters(
@@ -923,6 +1014,12 @@ class VesselPilotService:
         if not (candidate_dir / "parameters.json").is_file() or not (candidate_dir / "report.json").is_file():
             raise ValueError("The base candidate must be reconstructed and evaluated first")
         target = self._candidate_target(candidate_dir)
+        visual = read_json(candidate_dir / "report.json").get("visual_assessment")
+        if isinstance(visual, dict):
+            recorded = visual.get("vessels", {})
+            submitted = {"artery": artery_assessment, "vein": vein_assessment}
+            if any(submitted[name] != recorded.get(name, {}).get("label") for name in target_vessels(target)):
+                raise ValueError("Parameter suggestion assessments must match the recorded visual QC")
         base = read_json(candidate_dir / "parameters.json")
         tried = []
         for path in (case_dir / "candidates").iterdir():
@@ -941,14 +1038,18 @@ class VesselPilotService:
         if not report_path.is_file():
             raise ValueError("Candidate must be evaluated before finalization")
         report = read_json(report_path)
-        if report.get("conclusion") != "pass":
-            raise ValueError("Only a candidate with conclusion=pass can be finalized")
+        if report.get("technical_conclusion") != "pass" or report.get("visual_conclusion") != "pass" or report.get("conclusion") != "pass":
+            raise ValueError("Only a candidate with passing technical and visual QC can be finalized")
         target = self._candidate_target(candidate_dir)
         vessels = target_vessels(target)
         for name in vessels:
             path = candidate_dir / f"{name}.glb"
             if not path.is_file() or sha256_file(path) != report.get("metrics", {}).get(name, {}).get("sha256"):
                 raise ValueError("Candidate changed after evaluation; evaluate it again before finalization")
+            preview = Path(report.get("preview_montages", {}).get(name, ""))
+            visual = report.get("visual_assessment") or {}
+            if not preview.is_file() or sha256_file(preview) != visual.get("preview_sha256", {}).get(name):
+                raise ValueError("Candidate preview changed after visual assessment; evaluate it again")
         final_dir = case_dir / "final" / candidate_id
         if not final_dir.exists():
             final_dir.mkdir(parents=True, exist_ok=False)
@@ -965,6 +1066,9 @@ class VesselPilotService:
             "input_fingerprint": manifest["input_fingerprint"],
             "parameters": report["parameters"],
             "quality_scope": report["quality_scope"],
+            "technical_conclusion": report["technical_conclusion"],
+            "visual_assessment": report["visual_assessment"],
+            "visual_conclusion": report["visual_conclusion"],
             "clinical_quality_review_required": True,
             "artifacts": {
                 **{f"{vessel}_glb": str(final_dir / f"{vessel}.glb") for vessel in vessels},

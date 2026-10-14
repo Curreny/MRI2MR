@@ -78,6 +78,8 @@ afterEach(async () => {
 
 it('rejects missing result links, oversized images and invalid metadata', () => {
   expect(readVesselVisualization(content())?.candidate_id).toBe('round-1')
+  expect(readVesselVisualization(content({ ...visualization(), conclusion: 'review' }))?.conclusion).toBe('review')
+  expect(readVesselVisualization(content({ ...visualization(), stage: 'visual_qc' }))?.stage).toBe('visual_qc')
   expect(readVesselVisualization(content().slice(0, 1))).toBeUndefined()
   const value = visualization()
   if (value.images[0]) value.images[0].size = 1024 * 1024 + 1
@@ -156,6 +158,22 @@ it('reports an inaccessible artifact without hiding parameters or failing the ch
   )
   expect(host.textContent).toContain('图片无法显示')
   expect(host.textContent).toContain('800')
+})
+
+it('renders a saved candidate awaiting visual review', async () => {
+  const tool = node()
+  readToolDetail.mockResolvedValueOnce({
+    call: { name: tool.name, toolUseId: tool.toolUseId },
+    result: { content: content({ ...visualization(), conclusion: 'review' }) },
+  })
+  await act(async () =>
+    root.render(
+      createElement(VesselToolPreview, { node: tool, session, resources, locale: zhLocaleService() }),
+    ),
+  )
+  expect(host.querySelector('[data-conclusion="review"]')?.textContent).toContain('待复核')
+  expect(host.querySelector('img[src="blob:preview"]')).not.toBeNull()
+  expect(host.textContent).not.toContain('预览暂不可用')
 })
 
 it('releases late images and never paints them after a session switch', async () => {

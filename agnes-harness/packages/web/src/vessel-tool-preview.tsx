@@ -71,9 +71,9 @@ export function readVesselVisualization(content: readonly ContentBlock[]): Vesse
       value.version !== 1 ||
       !text(value.title) ||
       !text(value.case_id) ||
-      !['dicom', 'nifti', 'candidate', 'final', 'tuning'].includes(String(value.stage)) ||
+      !['dicom', 'nifti', 'candidate', 'visual_qc', 'final', 'tuning'].includes(String(value.stage)) ||
       (value.candidate_id != null && !text(value.candidate_id)) ||
-      (value.conclusion != null && !['pass', 'fail'].includes(String(value.conclusion))) ||
+      (value.conclusion != null && !['pass', 'fail', 'review'].includes(String(value.conclusion))) ||
       !numbers(value.parameters) ||
       !record(value.metrics) ||
       Object.keys(value.metrics).length > 2 ||

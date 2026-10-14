@@ -469,7 +469,11 @@ class VesselPilotServiceTest(unittest.TestCase):
         trimesh.creation.icosphere(subdivisions=1).export(candidate / "artery.glb")
         trimesh.creation.cylinder(radius=0.4, height=2.0).export(candidate / "vein.glb")
         report = self.service.evaluate_candidate(case_id, "baseline")
-        self.assertEqual(report["conclusion"], "pass")
+        self.assertEqual(report["technical_conclusion"], "pass")
+        self.assertEqual(report["visual_conclusion"], "pending")
+        self.assertEqual(report["conclusion"], "review")
+        with self.assertRaisesRegex(ValueError, "technical and visual QC"):
+            self.service.finalize_case(case_id, "baseline")
         self.assertEqual(set(report["metrics"]), {"artery", "vein"})
         distribution = report["vein_distribution_proxy"]
         self.assertEqual(distribution["method"], "expanded_artery_aabb_v1")
@@ -484,9 +488,30 @@ class VesselPilotServiceTest(unittest.TestCase):
         self.assertTrue((candidate / "previews" / "vein" / "montage.png").is_file())
         self.assertLess((candidate / "previews" / "artery" / "montage.png").stat().st_size, 2 * 1024 * 1024)
         self.assertLess((candidate / "previews" / "vein" / "montage.png").stat().st_size, 2 * 1024 * 1024)
+        (candidate / "previews" / "artery" / "montage.png").write_bytes(b"changed preview")
+        with self.assertRaisesRegex(ValueError, "preview changed after evaluation"):
+            self.service.record_visual_assessment(case_id, "baseline", {
+                "artery": {"label": "good", "reason": "正面和侧面可见连续主干"},
+                "vein": {"label": "good", "reason": "前后视角可见主要分支"},
+            })
+        self.service.evaluate_candidate(case_id, "baseline")
+        with self.assertRaisesRegex(ValueError, "exactly"):
+            self.service.record_visual_assessment(case_id, "baseline", {"artery": {"label": "good", "reason": "六视图主干连续，无明显伪影"}})
+        with self.assertRaisesRegex(ValueError, "reason"):
+            self.service.record_visual_assessment(case_id, "baseline", {"artery": {"label": "good", "reason": "短"}, "vein": {"label": "good", "reason": "六视图可见连续主干"}})
+        report = self.service.evaluate_candidate(case_id, "baseline", {
+            "artery": {"label": "good", "reason": "正面和侧面可见连续主干，未见明显噪声"},
+            "vein": {"label": "good", "reason": "六视图主要静脉连续，未见明显块状伪影"},
+        })
+        self.assertEqual(report["conclusion"], "pass")
+        self.assertEqual(report["visual_assessment"]["mesh_sha256"]["artery"], sha256_file(candidate / "artery.glb"))
+        self.assertEqual(self.service.evaluate_candidate(case_id, "baseline")["conclusion"], "pass")
+        with self.assertRaisesRegex(ValueError, "match the recorded visual QC"):
+            self.service.suggest_parameters(case_id, "baseline", "too_sparse", "good")
         final = self.service.finalize_case(case_id, "baseline")
         self.assertTrue(Path(final["artifacts"]["artery_glb"]).is_file())
         self.assertTrue(Path(final["artifacts"]["vein_glb"]).is_file())
+        self.assertEqual(final["visual_conclusion"], "pass")
         for target in ("artery", "vein"):
             with self.subTest(target=target):
                 single = candidate.parent / target
@@ -495,10 +520,17 @@ class VesselPilotServiceTest(unittest.TestCase):
                 atomic_json(single / "parameters.json", normalize_parameters(target))
                 trimesh.creation.icosphere(subdivisions=1).export(single / f"{target}.glb")
                 report = self.service.evaluate_candidate(case_id, target)
-                self.assertEqual(report["conclusion"], "pass")
+                self.assertEqual(report["conclusion"], "review")
                 self.assertEqual(set(report["metrics"]), {target})
                 self.assertEqual(set(report["preview_montages"]), {target})
                 self.assertIsNone(report["vein_distribution_proxy"])
+                uncertain = self.service.record_visual_assessment(case_id, target, {target: {"label": "uncertain", "reason": "六视图分辨率不足，无法判断细小分支"}})
+                self.assertEqual(uncertain["conclusion"], "review")
+                with self.assertRaisesRegex(ValueError, "technical and visual QC"):
+                    self.service.finalize_case(case_id, target)
+                defect = self.service.record_visual_assessment(case_id, target, {target: {"label": "too_sparse", "reason": "正面视角可见主要分支缺失，应调整参数"}})
+                self.assertEqual(defect["conclusion"], "fail")
+                self.service.record_visual_assessment(case_id, target, {target: {"label": "good", "reason": "正面和侧面主干连续，未见明显缺损"}})
                 final = self.service.finalize_case(case_id, target)
                 self.assertEqual(final["target"], target)
                 self.assertEqual(set(final["checksums"]), {f"{target}_glb"})
@@ -615,8 +647,12 @@ class McpProtocolTest(unittest.TestCase):
                     expected = {"artery", "vein"} if target == "both" else {target}
                     self.assertEqual({key[:-4] for key in state["result"] if key.endswith("_glb")}, expected)
                     report = service.evaluate_candidate(target, "run")
-                    self.assertEqual(report["conclusion"], "pass")
+                    self.assertEqual(report["technical_conclusion"], "pass")
                     self.assertEqual(set(report["metrics"]), expected)
+                    service.record_visual_assessment(target, "run", {
+                        name: {"label": "good", "reason": "合成体积的六视图表面连续，未见明显缺损"}
+                        for name in expected
+                    })
                     final = service.finalize_case(target, "run")
                     self.assertEqual(final["target"], target)
 
@@ -670,6 +706,8 @@ class McpProtocolTest(unittest.TestCase):
                 self.assertIn("start_vessel_candidate", names)
                 self.assertIn("choose_dicom_folder", names)
                 self.assertIn("suggest_vessel_parameters", names)
+                evaluation_tool = next(tool for tool in listed["result"]["tools"] if tool["name"] == "evaluate_vessel_candidate")
+                self.assertIn("assessments", evaluation_tool["inputSchema"]["properties"])
                 job_tool = next(
                     tool for tool in listed["result"]["tools"] if tool["name"] == "get_vessel_job"
                 )
@@ -750,8 +788,19 @@ class McpProtocolTest(unittest.TestCase):
                 self.assertEqual(preview["candidate_id"], "baseline")
                 self.assertEqual(len(preview["images"]), 2)
                 self.assertEqual(
-                    evaluated["result"]["structuredContent"]["conclusion"], "pass"
+                    evaluated["result"]["structuredContent"]["conclusion"], "review"
                 )
+                recorded = call({
+                    "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+                    "params": {"name": "evaluate_vessel_candidate", "arguments": {
+                        "case_id": "case-protocol", "candidate_id": "baseline",
+                        "assessments": {
+                            "artery": {"label": "good", "reason": "正面和侧面可见完整主干，未见明显断裂"},
+                            "vein": {"label": "good", "reason": "前后视角可见主要静脉分支，未见明显伪影"},
+                        },
+                    }},
+                })
+                self.assertEqual(recorded["result"]["structuredContent"]["conclusion"], "pass")
                 job_dir = root / "cases" / "case-protocol" / "jobs" / "job-wait"
                 job_dir.mkdir(parents=True)
                 atomic_json(
