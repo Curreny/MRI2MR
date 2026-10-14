@@ -89,7 +89,7 @@ MRI2MR-core/
 .\start_agnes.ps1
 ```
 
-脚本读取根目录的 `agnes.config.ps1`，自动设置 `AGH_HOME` 和 `AGNES_PROFILE`，并以本项目根目录作为 Agnes 工作区。默认打开 `http://127.0.0.1:4177`；如需其他端口，可运行 `.\start_agnes.ps1 -Port 4180`。修改模型账号、MCP 或 Skill 时，请沿用这个 `AGH_HOME`，避免连接到另一套实例。
+脚本固定使用本项目的 `agnes-harness/agh-home` 和 `local-dev` profile，即使终端里残留旧的 `AGH_HOME`，也会以本项目根目录作为 Agnes 工作区。默认打开 `http://127.0.0.1:4177`；如需其他端口，可运行 `.\start_agnes.ps1 -Port 4180`。修改模型账号、MCP 或 Skill 时，请沿用这个 `AGH_HOME`，避免连接到另一套实例。
 
 Agent 的后端执行日志默认写入 `agnes-harness/agh-home/logs/agent/agent.jsonl`，无需打开网页即可检查。日志包含会话 ID、回合、步骤、工具调用及结果、耗时、VesselPilot 的病例/候选/作业 ID、有效参数、调整原因和错误摘要。DEBUG 另外记录模型请求与内部执行事件；INFO 记录正常流程；WARN 记录人工等待、取消或异常停止；ERROR 记录工具、模型或会话失败。不直接复制原始对话、推理正文、完整工具入参和图片数据，完整执行事实仍由原会话记录保存。
 
