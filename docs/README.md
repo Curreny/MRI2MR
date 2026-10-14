@@ -22,9 +22,8 @@ Agnes Harness 可在其目录中运行 `corepack pnpm install --frozen-lockfile`
 | 脚本 | 用途 |
 | --- | --- |
 | `start_core.bat` | 在 Windows 上用便携 Python 启动原有 WebUI，并检查 MATLAB、Docker。 |
-| `agnes.config.ps1`、`start_agnes.ps1` | 设置当前 checkout 的 Agnes 数据目录与 profile，启动已构建的 CLI。 |
-| `show_agent_logs.ps1` | 按级别、会话、工具等条件查看 Agnes JSONL 日志。 |
+| `start_agnes.ps1` | 固定当前 checkout 的 Agnes 数据目录与 profile，启动已构建的 CLI。 |
 | `tools/pack_core.ps1` | 复制源码与运行资源、装入 Python 环境，生成 Core 启动文件和报告。 |
 | `tools/pack_portable.ps1` | 生成包含更多独立运行组件的便携包。 |
 
-这些 PowerShell 脚本承担 Windows 启动、文件复制和日志查看任务；uv 只能解决 Python 包与环境的管理，不能直接替代这些步骤。以后若需要跨平台打包，可以逐步换成统一的任务运行器，但需要先确保 MATLAB、SPM、Docker 和二进制工具的安装及版本可复现。
+这些 PowerShell 脚本承担 Windows 启动和文件复制任务；uv 只能解决 Python 包与环境的管理，不能直接替代这些步骤。以后若需要跨平台打包，可以逐步换成统一的任务运行器，但需要先确保 MATLAB、SPM、Docker 和二进制工具的安装及版本可复现。

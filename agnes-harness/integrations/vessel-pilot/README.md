@@ -58,7 +58,7 @@ node $agnes mcp add vessel-pilot `
 
 Run these commands from `MRI2MR/agnes-harness` with the same `AGH_HOME` and profile used by WebUI. The current project-local home is `MRI2MR/agnes-harness/agh-home`; using another home creates a separate control plane.
 
-For normal Web startup, run `MRI2MR/start_agnes.ps1` from the project root. It loads `MRI2MR/agnes.config.ps1`, so the home/profile do not need to be typed on each launch.
+For normal Web startup, run `MRI2MR/start_agnes.ps1` from the project root. It pins this checkout's home/profile, so they do not need to be typed on each launch.
 
 The canonical local executable is `packages\cli\dist\local\agnes.mjs`. After changing Harness or composer source, rebuild that exact entry before testing:
 

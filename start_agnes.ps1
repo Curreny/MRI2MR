@@ -1,9 +1,6 @@
 param(
     [ValidateRange(1, 65535)]
-    [int]$Port = 4177,
-    [ValidateSet('Debug', 'Info', 'Warn', 'Error', 'Off')]
-    [string]$LogLevel = 'Info',
-    [string]$LogDirectory
+    [int]$Port = 4177
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,14 +14,9 @@ $agnesProfile = 'local-dev'
 $env:AGH_HOME = $agnesHome
 $env:AGNES_PROFILE = $agnesProfile
 
-$env:AGNES_AGENT_LOG_LEVEL = $LogLevel.ToLowerInvariant()
-if ($LogDirectory) {
-    $env:AGNES_AGENT_LOG_DIR = [System.IO.Path]::GetFullPath($LogDirectory)
-} else {
-    $env:AGNES_AGENT_LOG_DIR = Join-Path $agnesHome 'logs\agent'
-}
+$env:AGNES_AGENT_LOG_LEVEL = 'off'
+Remove-Item Env:AGNES_AGENT_LOG_DIR -ErrorAction SilentlyContinue
 Write-Output "Agnes home: $agnesHome (profile: $agnesProfile)"
-Write-Output "Agent logs: $env:AGNES_AGENT_LOG_DIR\agent.jsonl (minimum level: $LogLevel)"
 
 $cli = Join-Path $harnessRoot 'packages\cli\dist\local\agnes.mjs'
 if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) {
