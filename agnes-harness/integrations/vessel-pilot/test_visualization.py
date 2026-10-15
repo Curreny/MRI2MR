@@ -100,19 +100,26 @@ class VisualizationTest(unittest.TestCase):
         result["status"] = "running"
         self.assertEqual(tool_visualization(self.service, "get_vessel_job", {"case_id": "case-preview"}, result), (None, []))
 
-    def test_candidate_final_and_tuning_keep_candidate_identity_and_parameters(self):
+    def test_only_initial_candidate_evaluation_carries_the_six_view_image(self):
         candidate = self.case_dir / "candidates" / "round-1"
         candidate.mkdir(parents=True)
         path = candidate / "montage.png"
         Image.new("RGB", (1440, 960), (200, 30, 30)).save(path)
         report = {"parameters": {"vessel_threshold": 800}, "metrics": {"artery": {"file_bytes": 100, "vertices": 20, "faces": 30}}, "conclusion": "pass", "preview_montages": {"artery": str(path)}}
         atomic_json(candidate / "report.json", report)
-        for name, stage in (("evaluate_vessel_candidate", "candidate"), ("finalize_vessel_case", "final"), ("suggest_vessel_parameters", "tuning")):
-            data = report if stage == "candidate" else {"parameters": {"vessel_threshold": 850}, "reason": "Reduce noise", "status": "suggested"}
-            value, blocks = tool_visualization(self.service, name, {"case_id": "case-preview", "candidate_id": "round-1", "artery_assessment": "too_dense"}, data)
+        stages = (
+            ("evaluate_vessel_candidate", "candidate", report, {}),
+            ("evaluate_vessel_candidate", "visual_qc", report, {"assessments": [{"label": "good", "reason": "visible"}]}),
+            ("finalize_vessel_case", "final", {"parameters": {"vessel_threshold": 850}}, {}),
+            ("suggest_vessel_parameters", "tuning", {"parameters": {"vessel_threshold": 850}, "reason": "Reduce noise", "status": "suggested"}, {}),
+        )
+        for name, stage, data, extra_arguments in stages:
+            arguments = {"case_id": "case-preview", "candidate_id": "round-1", "artery_assessment": "too_dense", **extra_arguments}
+            value, blocks = tool_visualization(self.service, name, arguments, data)
             self.assertEqual((value["stage"], value["case_id"], value["candidate_id"]), (stage, "case-preview", "round-1"))
             self.assertEqual(value["parameters"]["vessel_threshold"], 800)
             self.check_images(value, blocks)
+            self.assertEqual(len(blocks), 1 if stage == "candidate" else 0)
             if stage == "tuning":
                 self.assertEqual(value["decision"]["next_parameters"]["vessel_threshold"], 850)
 

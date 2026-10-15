@@ -7,6 +7,7 @@ type ToolNode = Extract<UINode, { kind: 'tool' }>
 const TOOL =
   /^(?:mcp_vessel_pilot_[a-f0-9]{8}_)?(?:inspect_dicom_case|start_dicom_conversion|get_vessel_job|evaluate_vessel_candidate|finalize_vessel_case|suggest_vessel_parameters)$/
 const HASH = /^[a-f0-9]{64}$/
+const IMAGE_STAGES = new Set(['dicom', 'nifti', 'candidate'])
 const noSubscription = () => () => undefined
 const record = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
@@ -169,9 +170,12 @@ export function VesselToolPreview({
         throw new Error('Tool result mismatch')
       const value = readVesselVisualization(detail.result.content)
       if (!value) throw new Error('Preview metadata unavailable')
-      setLoaded({ owner, value, images: value.images.map(({ label }) => ({ label })) })
+      // Older persisted tool results may still contain the same candidate montage
+      // on QC/tuning/finalization cards. Only the first candidate card owns it.
+      const visibleImages = IMAGE_STAGES.has(value.stage) ? value.images : []
+      setLoaded({ owner, value, images: visibleImages.map(({ label }) => ({ label })) })
       await Promise.all(
-        value.images.map(async (image, index) => {
+        visibleImages.map(async (image, index) => {
           try {
             const resource = await resources.images.load({
               laneId: 'main',

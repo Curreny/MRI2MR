@@ -29,8 +29,6 @@ if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) {
 
 function Resolve-VesselPilotPython {
     $candidates = [System.Collections.Generic.List[string]]::new()
-    $candidates.Add((Join-Path $projectRoot 'runtime\python\BrainAAL\python.exe'))
-    $candidates.Add((Join-Path $projectRoot 'venv\runtime\python\BrainAAL\python.exe'))
 
     if ($env:CONDA_DEFAULT_ENV -eq 'BrainAAL' -and $env:CONDA_PREFIX) {
         $candidates.Add((Join-Path $env:CONDA_PREFIX 'python.exe'))

@@ -192,15 +192,19 @@ def tool_visualization(service: Any, name: str, arguments: dict[str, Any], data:
         stage = {"evaluate_vessel_candidate": "candidate", "finalize_vessel_case": "final", "suggest_vessel_parameters": "tuning"}[name]
         if name == "evaluate_vessel_candidate" and arguments.get("assessments") is not None:
             stage = "visual_qc"
-        title = {"candidate": "候选评估 · GLB 六视图", "visual_qc": "视觉质控 · 判断与依据", "final": "最终模型 · GLB 六视图", "tuning": "Agent 参数寻优 · 本轮判断与下一步"}[stage]
+        title = {"candidate": "候选评估 · GLB 六视图", "visual_qc": "视觉质控 · 判断与依据", "final": "最终模型 · 定稿摘要", "tuning": "Agent 参数寻优 · 本轮判断与下一步"}[stage]
         case_dir, _ = service._load_case(case_id)
         report = data if stage in {"candidate", "visual_qc"} else json.loads((case_dir / "candidates" / candidate_id / "report.json").read_text(encoding="utf-8"))
         parameters, metrics, conclusion = report.get("parameters", {}), report.get("metrics", {}), report.get("conclusion")
-        for vessel, value in report.get("preview_montages", {}).items():
-            path = Path(value).resolve(strict=True)
-            path.relative_to(case_dir.resolve())
-            with Image.open(path) as image:
-                images.append((f"{'动脉' if vessel == 'artery' else '静脉'} GLB · 前 / 后 / 左 / 右 / 上 / 下", image.copy()))
+        # A candidate's montage is immutable and is already shown by the first
+        # evaluation. Later QC, tuning and finalization cards only add decisions;
+        # attaching the same pixels again duplicates the image in chat history.
+        if stage == "candidate":
+            for vessel, value in report.get("preview_montages", {}).items():
+                path = Path(value).resolve(strict=True)
+                path.relative_to(case_dir.resolve())
+                with Image.open(path) as image:
+                    images.append((f"{'动脉' if vessel == 'artery' else '静脉'} GLB · 前 / 后 / 左 / 右 / 上 / 下", image.copy()))
     else:
         return None, []
     descriptors, blocks = [], []

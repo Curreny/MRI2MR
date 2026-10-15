@@ -244,7 +244,11 @@ class McpServer:
                 }
             ]
             content.extend(image_blocks)
-            if name == "evaluate_vessel_candidate" and visualization is None:
+            if (
+                name == "evaluate_vessel_candidate"
+                and arguments.get("assessments") is None
+                and visualization is None
+            ):
                 for vessel, path_value in data.get("preview_montages", {}).items():
                     path = Path(path_value)
                     if path.is_file():
